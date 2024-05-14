@@ -1,0 +1,8 @@
+[Unit]
+Description=Update systemd-networkd WireGuard DynDNS endpoints for %i.netdev minutely
+
+[Timer]
+OnCalendar=minutely
+
+[Install]
+WantedBy=timers.target

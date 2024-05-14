@@ -1,0 +1,11 @@
+[Unit]
+Description=Update systemd-networkd WireGuard DynDNS endpoints for %i.netdev
+ConditionCapability=CAP_NET_ADMIN
+DefaultDependencies=no
+BindsTo=systemd-networkd.service
+After=systemd-networkd.service network-online.target
+Wants=systemd-networkd.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python /usr/bin/sd-networkd-wg-ddns.py /etc/systemd/network/%i.netdev
