@@ -10,6 +10,8 @@
 #include <dirent.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <linux/wireguard.h>
+#include "libmnl_minimized.h"
 
 #define println_with_prefix_and_source(prefix, format, arg...) \
     printf("["prefix"] %s:%d: "format"\n", __FUNCTION__, __LINE__, ##arg)
@@ -267,6 +269,11 @@ int parse_netdev_buffer(
             break;
         }
     }
+    if (!netdev->name[0]) {
+        println_error("Netdev does not define a name");
+        r = -1;
+        goto free_peers;
+    }
     if (!netdev->peers_count) {
         free(netdev->peers);
     } else if (netdev->peers_count != netdev->peers_allocated) {
@@ -371,7 +378,7 @@ int read_netdev_configs(
     char netdev_name[NAME_MAX + 1];
     char const *netdev_stem;
     size_t len_netdev_stem;
-    unsigned short i;
+    unsigned short i, j;
     int r, fd_configs, fd_netdev;
 
     fd_configs = open(PATH_CONFIGS, O_RDONLY | O_DIRECTORY);
@@ -401,6 +408,12 @@ int read_netdev_configs(
             println_error_with_errno("Failed to close netdev config file '%s'", netdev_name);
             r = -1;
         }
+        for (j = 0; j < i; ++j) {
+            if (!strncmp(netdevs[i].name, netdevs[j].name, sizeof netdevs->name)) {
+                println_error("Duplicated config for interface '%s'", netdevs[i].name);
+                r = -1;
+            }
+        }
         if (r) {
             goto close_configs;
         }
@@ -413,6 +426,8 @@ close_configs:
     }
     return r;
 }
+
+
 
 int work(
     struct netdev const *const restrict netdevs,
