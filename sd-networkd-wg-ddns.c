@@ -1,7 +1,6 @@
-// WIP, DO NOT USE
-
 #include <limits.h>
 #include <linux/limits.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
@@ -9,6 +8,8 @@
 #include <errno.h>
 #include <string.h>
 #include <dirent.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 
 #define println_with_prefix_and_source(prefix, format, arg...) \
     printf("["prefix"] %s:%d: "format"\n", __FUNCTION__, __LINE__, ##arg)
@@ -39,9 +40,22 @@
 #define LEN_KEY_PUBLICKEY (sizeof KEY_PUBLICKEY) - 1
 #define LEN_KEY_ENDPOINT (sizeof KEY_ENDPOINT) - 1
 
+enum host_type {
+    host_type_domain,
+    host_type_ipv4,
+    host_type_ipv6
+};
+
+char *host_type_strings[] = {
+    "domain",
+    "IPv4",
+    "IPv6"
+};
+
 struct peer {
     char public_key[45]; // len = 44
     char endpoint_host[256]; // len = 255 (max length of domain name)
+    enum host_type endpoint_host_type;
     unsigned short endpoint_port;
     unsigned short len_public_key;
     unsigned short len_endpoint_host;
@@ -73,6 +87,7 @@ int parse_netdev_buffer(
     enum parse_status parse_status;
     char const *key, *value;
     char buffer_port[6];
+    struct in6_addr buffer_in6;
     int r;
 
     netdev->peers = malloc(sizeof *netdev->peers * 0x10);
@@ -97,12 +112,6 @@ int parse_netdev_buffer(
         if (stripped_end < stripped_start) continue;
         ++stripped_end;
         len_stripped = stripped_end - stripped_start;
-        // printf("Line (%lu): '", len_stripped);
-        // for (size_t i = stripped_start; i < stripped_end; ++i) {
-        //     putchar(buffer[i]);
-        // }
-        // printf("'\n");
-        // Section title
         key = buffer + stripped_start;
         if (buffer[stripped_start] == '[') {
             if (buffer[stripped_end - 1] != ']') {
@@ -146,6 +155,7 @@ int parse_netdev_buffer(
                 peer->endpoint_port = 0;
                 peer->public_key[0] = '\0';
                 peer->len_public_key = 0;
+                peer->endpoint_host_type = host_type_domain;
                 parse_status = parse_status_peer_section;
             } else {
                 parse_status = parse_status_other_section;
@@ -206,25 +216,49 @@ int parse_netdev_buffer(
                     len_port = stripped_end - port_start;
                     // Host
                     host_start = value_start;
-                    if (buffer[host_start] == '[' && buffer[host_end - 1] == ']') {
-                        println_info("IPv6");
-                        ++host_start;
-                        --host_end;
-                        if (host_end <= host_start) continue; // Illegal
-                    }
                     len_host = host_end - host_start;
+                    if (buffer[host_start] == '[' && buffer[host_end - 1] == ']') {
+                        // Check if is v6
+                        if (host_end > host_start + 2) { // Could be
+                            ++host_start;
+                            --host_end;
+                            len_host -= 2;
+                            len_host = min2(len_host, sizeof peer->endpoint_host - 1);
+                            memcpy(peer->endpoint_host, buffer + host_start, len_host);
+                            peer->endpoint_host[len_host] = '\0';
+                            if (inet_pton(AF_INET6, peer->endpoint_host, &buffer_in6) == 1) { // Is v6
+                                peer->endpoint_host_type = host_type_ipv6;
+                                peer->len_endpoint_host = len_host;
+                            } else {
+                                peer->endpoint_host_type = host_type_domain;
+                                --host_start;
+                                ++host_end;
+                                len_host += 2;
+                            }
+                        } else { // Could not be
+                            peer->endpoint_host_type = host_type_domain;   
+                        }
+                        if (peer->endpoint_host_type != host_type_ipv6) {
+                            peer->len_endpoint_host = min2(len_host, sizeof peer->endpoint_host - 1);
+                            memcpy(peer->endpoint_host, buffer + host_start, peer->len_endpoint_host);
+                            peer->endpoint_host[peer->len_endpoint_host] = '\0';
+                        }
+                    } else {
+                        len_host = min2(len_host, sizeof peer->endpoint_host - 1);
+                        memcpy(peer->endpoint_host, buffer + host_start, len_host);
+                        peer->endpoint_host[len_host] = '\0';
+                        if (inet_pton(AF_INET, peer->endpoint_host, &buffer_in6) == 1) {
+                            peer->endpoint_host_type = host_type_ipv4;
+                        } else {
+                            peer->endpoint_host_type = host_type_domain;
+                        }
+                        peer->len_endpoint_host = len_host;
+                    }
                     // Read
                     len_port = min2(len_port, sizeof buffer_port - 1);
                     memcpy(buffer_port, buffer + port_start, len_port);
                     buffer_port[len_port] = '\0';
                     peer->endpoint_port = strtoul(buffer_port, NULL, 10);
-                    // if (sscanf(buffer + host_end + 1, "%hu", &peer->endpoint_port) != 1) {
-                    //     println_error("Endpoint port ('%s') could not be parsed", buffer_port);
-                    //     continue;
-                    // }
-                    peer->len_endpoint_host = min2(len_host, sizeof peer->endpoint_host - 1);
-                    memcpy(peer->endpoint_host, buffer + host_start, peer->len_endpoint_host);
-                    peer->endpoint_host[peer->len_endpoint_host] = '\0';
                 }
                 break;
             }
@@ -266,6 +300,7 @@ void dump_netdev(
         peer = netdev->peers + i;
         println_info("  -> Public Key: %s", peer->public_key);
         println_info("  -> Host: %s", peer->endpoint_host);
+        println_info("  -> Host type: %s", host_type_strings[peer->endpoint_host_type]);
         println_info("  -> Port: %hu", peer->endpoint_port);
     }
 }
