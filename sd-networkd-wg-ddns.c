@@ -32,6 +32,7 @@
 
 #define min2(A, B) (A > B ? B : A)
 
+#define ALLOC_BASE 0x10
 #define SIZE_BUFFER 0x100000
 #define PATH_CONFIGS "/etc/systemd/network"
 #define NETDEV_STEM_MAX NAME_MAX - 6 // including terminating '\0', NAME_MAX + 1 - 7
@@ -71,7 +72,7 @@ struct peer {
 };
 
 struct netdev {
-    char name[16]; // len = 15
+    char name[IFNAMSIZ]; // len = 15
     unsigned short len_name;
     struct peer *peers;
     unsigned short peers_count;
@@ -84,6 +85,18 @@ enum parse_status {
     parse_status_peer_section,
     parse_status_other_section
 };
+
+
+int init_netdev_peers(struct netdev *const restrict netdev) {
+    netdev->peers = malloc(sizeof *netdev->peers * ALLOC_BASE);
+    if (!netdev->peers) {
+        println_error_with_errno("Failed to allocate memory for peers");
+        return -1;
+    }
+    netdev->peers_allocated = ALLOC_BASE;
+    netdev->peers_count = 0;
+    return 0;
+}
 
 int parse_netdev_buffer(
     struct netdev *const restrict netdev, 
@@ -98,13 +111,9 @@ int parse_netdev_buffer(
     struct in6_addr buffer_in6;
     int r;
 
-    netdev->peers = malloc(sizeof *netdev->peers * 0x10);
-    if (!netdev->peers) {
-        println_error_with_errno("Failed to allocate memory for peers");
+    if (init_netdev_peers(netdev)) {
         return -1;
     }
-    netdev->peers_allocated = 0x10;
-    netdev->peers_count = 0;
     netdev->name[0] = '\0';
     netdev->len_name = 0;
 
@@ -322,8 +331,6 @@ int parse_netdev_config(
     struct netdev *const restrict netdev, 
     int const fd_netdev
 ) {
-    char buffer_stack[SIZE_BUFFER];
-    char *buffer_heap = NULL;
     char *buffer;
     off_t size_file;
     ssize_t size_read;
@@ -342,37 +349,32 @@ int parse_netdev_config(
         println_error_with_errno("Failed to seek to start of config file");
         return -1;
     }
-    if (size_file >= SIZE_BUFFER) {
-        buffer_heap = malloc(size_file + 1);
-        if (!buffer_heap) {
-            println_error_with_errno("Failed to allocate memory for buffer to read config file");
-            return -1;
-        }
-        buffer = buffer_heap;
-    } else {
-        buffer = buffer_stack;
+    buffer = malloc(size_file + 1);
+    if (!buffer) {
+        println_error_with_errno("Failed to allocate memory for buffer to read config file");
+        return -1;
     }
     size_read = read(fd_netdev, buffer, size_file);
     if (size_read < 0) {
         println_error_with_errno("Failed to read content of config file");
         r = -1;
-        goto free_heap;
+        goto free_buffer;
     }
     if (size_read != size_file) {
         println_error("Read size (%ld) != expected size (%ld)", size_read, size_file);
         r = -1;
-        goto free_heap;
+        goto free_buffer;
     }
     buffer[size_file] = '\0';
     if (parse_netdev_buffer(netdev, buffer, size_file)) {
         println_error("Failed to parse config buffer");
         r = -1;
-        goto free_heap;
+        goto free_buffer;
     }
     dump_netdev(netdev);
     r = 0;
-free_heap:
-    if (buffer_heap) free(buffer_heap);
+free_buffer:
+    free(buffer);
     return r;
 }
 
@@ -433,8 +435,91 @@ close_configs:
     return r;
 }
 
-// static int parse_device(const struct nlattr *attr, void *data)
+
+// static int parse_peer(const struct nlattr *attr, void *data)
 // {
+// 	struct wgpeer *peer = data;
+
+// 	switch (mnl_attr_get_type(attr)) {
+// 	case WGPEER_A_UNSPEC:
+// 		break;
+// 	case WGPEER_A_PUBLIC_KEY:
+// 		if (mnl_attr_get_payload_len(attr) == sizeof(peer->public_key)) {
+// 			memcpy(peer->public_key, mnl_attr_get_payload(attr), sizeof(peer->public_key));
+// 			peer->flags |= WGPEER_HAS_PUBLIC_KEY;
+// 		}
+// 		break;
+// 	case WGPEER_A_PRESHARED_KEY:
+// 		if (mnl_attr_get_payload_len(attr) == sizeof(peer->preshared_key)) {
+// 			memcpy(peer->preshared_key, mnl_attr_get_payload(attr), sizeof(peer->preshared_key));
+// 			if (!key_is_zero(peer->preshared_key))
+// 				peer->flags |= WGPEER_HAS_PRESHARED_KEY;
+// 		}
+// 		break;
+// 	case WGPEER_A_ENDPOINT: {
+// 		struct sockaddr *addr;
+
+// 		if (mnl_attr_get_payload_len(attr) < sizeof(*addr))
+// 			break;
+// 		addr = mnl_attr_get_payload(attr);
+// 		if (addr->sa_family == AF_INET && mnl_attr_get_payload_len(attr) == sizeof(peer->endpoint.addr4))
+// 			memcpy(&peer->endpoint.addr4, addr, sizeof(peer->endpoint.addr4));
+// 		else if (addr->sa_family == AF_INET6 && mnl_attr_get_payload_len(attr) == sizeof(peer->endpoint.addr6))
+// 			memcpy(&peer->endpoint.addr6, addr, sizeof(peer->endpoint.addr6));
+// 		break;
+// 	}
+// 	case WGPEER_A_PERSISTENT_KEEPALIVE_INTERVAL:
+// 		if (!mnl_attr_validate(attr, MNL_TYPE_U16))
+// 			peer->persistent_keepalive_interval = mnl_attr_get_u16(attr);
+// 		break;
+// 	case WGPEER_A_LAST_HANDSHAKE_TIME:
+// 		if (mnl_attr_get_payload_len(attr) == sizeof(peer->last_handshake_time))
+// 			memcpy(&peer->last_handshake_time, mnl_attr_get_payload(attr), sizeof(peer->last_handshake_time));
+// 		break;
+// 	case WGPEER_A_RX_BYTES:
+// 		if (!mnl_attr_validate(attr, MNL_TYPE_U64))
+// 			peer->rx_bytes = mnl_attr_get_u64(attr);
+// 		break;
+// 	case WGPEER_A_TX_BYTES:
+// 		if (!mnl_attr_validate(attr, MNL_TYPE_U64))
+// 			peer->tx_bytes = mnl_attr_get_u64(attr);
+// 		break;
+// 	case WGPEER_A_ALLOWEDIPS:
+// 		return mnl_attr_parse_nested(attr, parse_allowedips, peer);
+// 	}
+
+// 	return MNL_CB_OK;
+// }
+
+// static int parse_peers(const struct nlattr *attr, void *data)
+// {
+// 	struct wgdevice *device = data;
+// 	struct wgpeer *new_peer = calloc(1, sizeof(*new_peer));
+// 	int ret;
+
+// 	if (!new_peer) {
+// 		perror("calloc");
+// 		return MNL_CB_ERROR;
+// 	}
+// 	if (!device->first_peer)
+// 		device->first_peer = device->last_peer = new_peer;
+// 	else {
+// 		device->last_peer->next_peer = new_peer;
+// 		device->last_peer = new_peer;
+// 	}
+// 	ret = mnl_attr_parse_nested(attr, parse_peer, new_peer);
+// 	if (!ret)
+// 		return ret;
+// 	if (!(new_peer->flags & WGPEER_HAS_PUBLIC_KEY))
+// 		return MNL_CB_ERROR;
+// 	return MNL_CB_OK;
+// }
+
+
+// static int parse_interface(
+//     struct nlattr const *const restrict attr, 
+//     void *data
+// ) {
 // 	struct wgdevice *device = data;
 
 // 	switch (mnl_attr_get_type(attr)) {
@@ -478,60 +563,58 @@ close_configs:
 // }
 
 
-// static int read_device_cb(const struct nlmsghdr *nlh, void *data)
-// {
-// 	return mnl_attr_parse(nlh, sizeof(struct genlmsghdr), parse_device, data);
+// static int get_interface_callback(
+//     struct nlmsghdr const *const restrict message_header, 
+//     void *const restrict data
+// ) {
+// 	return mnl_attr_parse(message_header, sizeof(struct genlmsghdr), parse_device, data);
 // }
 
-// static int kernel_get_device(struct wgdevice **device, const char *iface)
-// {
-// 	int ret;
-// 	struct nlmsghdr *nlh;
-// 	struct mnlg_socket *nlg;
 
-// 	/* libmnl doesn't check the buffer size, so enforce that before using. */
-// 	if (strlen(iface) >= IFNAMSIZ) {
-// 		errno = ENAMETOOLONG;
-// 		return -ENAMETOOLONG;
+
+// static int get_interface(char const interface[IFNAMSIZ]) {
+// 	struct mnlg_socket *generic_socket;
+// 	struct nlmsghdr *message_header;
+//     struct netdev interace;
+
+//     // if (!init_netdev_peers(struct netdev *const restrict netdev))
+
+//     // interace.len_name = 
+
+//     int r;
+
+// 	generic_socket = mnlg_socket_open(WG_GENL_NAME, WG_GENL_VERSION);
+// 	if (!generic_socket) {
+//         println_error_with_errno("Failed to open generic socket '%s'", WG_GENL_NAME);
+//         return -1;
 // 	}
 
-// try_again:
-// 	ret = 0;
-// 	*device = calloc(1, sizeof(**device));
-// 	if (!*device)
-// 		return -errno;
-
-// 	nlg = mnlg_socket_open(WG_GENL_NAME, WG_GENL_VERSION);
-// 	if (!nlg) {
-// 		free_wgdevice(*device);
-// 		*device = NULL;
-// 		return -errno;
-// 	}
-
-// 	nlh = mnlg_msg_prepare(nlg, WG_CMD_GET_DEVICE, NLM_F_REQUEST | NLM_F_ACK | NLM_F_DUMP);
-// 	mnl_attr_put_strz(nlh, WGDEVICE_A_IFNAME, iface);
-// 	if (mnlg_socket_send(nlg, nlh) < 0) {
-// 		ret = -errno;
-// 		goto out;
+// 	message_header = mnlg_msg_prepare(generic_socket, WG_CMD_GET_DEVICE, NLM_F_REQUEST | NLM_F_ACK | NLM_F_DUMP);
+// 	mnl_attr_put_strz(message_header, WGDEVICE_A_IFNAME, interface);
+// 	if (mnlg_socket_send(generic_socket, message_header) < 0) {
+//         println_error_with_errno("Failed to send message to get wireguard interface");
+//         r = -1;
+//         goto close_socket;
 // 	}
 // 	errno = 0;
-// 	if (mnlg_socket_recv_run(nlg, read_device_cb, *device) < 0) {
+// 	if (mnlg_socket_recv_run(generic_socket, read_device_cb, *device) < 0) {
 // 		ret = errno ? -errno : -EINVAL;
 // 		goto out;
 // 	}
-// 	coalesce_peers(*device);
+// 	// coalesce_peers(*device);
 
-// out:
-// 	if (nlg)
-// 		mnlg_socket_close(nlg);
-// 	if (ret) {
-// 		free_wgdevice(*device);
-// 		if (ret == -EINTR)
-// 			goto try_again;
-// 		*device = NULL;
-// 	}
-// 	errno = -ret;
-// 	return ret;
+// // out:
+// // 	if (nlg)
+// // 		mnlg_socket_close(nlg);
+// // 	if (ret) {
+// // 		free_wgdevice(*device);
+// // 		if (ret == -EINTR)
+// // 			goto try_again;
+// // 		*device = NULL;
+// // 	}
+// close_socket:
+//     mnlg_socket_close(generic_socket);
+// 	return r;
 // }
 
 
@@ -549,8 +632,6 @@ int work(
 }
 
 int main(int argc, char const *argv[]) {
-    struct netdev netdevs_stack[0x10];
-    struct netdev *netdevs_heap = NULL;
     struct netdev *netdevs;
     unsigned short netdevs_count;
 
@@ -559,28 +640,23 @@ int main(int argc, char const *argv[]) {
         return -1;
     }
     netdevs_count = argc - 1;
-    if (netdevs_count > 0x10) {
-        netdevs_heap = malloc(sizeof *netdevs_heap * netdevs_count);
-        if (!netdevs_heap) {
-            println_error_with_errno("Failed to allocate memory on heap for %hu netdevs", netdevs_count);
-            return -1;
-        }
-        netdevs = netdevs_heap;
-    } else {
-        netdevs = netdevs_stack;
+    netdevs = malloc(sizeof *netdevs * netdevs_count);
+    if (!netdevs) {
+        println_error_with_errno("Failed to allocate memory on heap for %hu netdevs", netdevs_count);
+        return -1;
     }
     if (read_netdev_configs(netdevs, netdevs_count, argv + 1)) {
         println_error("Failed to read netdev configs");
-        goto free_heap;
+        goto free_netdevs;
     }
     for(;;) {
         if (work(netdevs, netdevs_count)) {
             println_error("Failed to work");
-            goto free_heap;
+            goto free_netdevs;
         }
         sleep(10);
     }
-free_heap:
-    if (netdevs_heap) free(netdevs_heap);
+free_netdevs:
+    free(netdevs);
     return -1; // There's no normal exit, any exit means error
 }
