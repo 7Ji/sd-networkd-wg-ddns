@@ -1,16 +1,22 @@
+/* C */
+#include <errno.h>
 #include <limits.h>
-#include <linux/limits.h>
-#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+/* POSIX */
+#include <dirent.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <errno.h>
-#include <string.h>
-#include <dirent.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
+/* Linux */
+#include <linux/if.h>
+#include <linux/limits.h>
 #include <linux/wireguard.h>
+/* Network */
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+/* Library */
 #include "libmnl_minimized.h"
 
 #define println_with_prefix_and_source(prefix, format, arg...) \
@@ -426,6 +432,107 @@ close_configs:
     }
     return r;
 }
+
+// static int parse_device(const struct nlattr *attr, void *data)
+// {
+// 	struct wgdevice *device = data;
+
+// 	switch (mnl_attr_get_type(attr)) {
+// 	case WGDEVICE_A_UNSPEC:
+// 		break;
+// 	case WGDEVICE_A_IFINDEX:
+// 		if (!mnl_attr_validate(attr, MNL_TYPE_U32))
+// 			device->ifindex = mnl_attr_get_u32(attr);
+// 		break;
+// 	case WGDEVICE_A_IFNAME:
+// 		if (!mnl_attr_validate(attr, MNL_TYPE_STRING)) {
+// 			strncpy(device->name, mnl_attr_get_str(attr), sizeof(device->name) - 1);
+// 			device->name[sizeof(device->name) - 1] = '\0';
+// 		}
+// 		break;
+// 	case WGDEVICE_A_PRIVATE_KEY:
+// 		if (mnl_attr_get_payload_len(attr) == sizeof(device->private_key)) {
+// 			memcpy(device->private_key, mnl_attr_get_payload(attr), sizeof(device->private_key));
+// 			device->flags |= WGDEVICE_HAS_PRIVATE_KEY;
+// 		}
+// 		break;
+// 	case WGDEVICE_A_PUBLIC_KEY:
+// 		if (mnl_attr_get_payload_len(attr) == sizeof(device->public_key)) {
+// 			memcpy(device->public_key, mnl_attr_get_payload(attr), sizeof(device->public_key));
+// 			device->flags |= WGDEVICE_HAS_PUBLIC_KEY;
+// 		}
+// 		break;
+// 	case WGDEVICE_A_LISTEN_PORT:
+// 		if (!mnl_attr_validate(attr, MNL_TYPE_U16))
+// 			device->listen_port = mnl_attr_get_u16(attr);
+// 		break;
+// 	case WGDEVICE_A_FWMARK:
+// 		if (!mnl_attr_validate(attr, MNL_TYPE_U32))
+// 			device->fwmark = mnl_attr_get_u32(attr);
+// 		break;
+// 	case WGDEVICE_A_PEERS:
+// 		return mnl_attr_parse_nested(attr, parse_peers, device);
+// 	}
+
+// 	return MNL_CB_OK;
+// }
+
+
+// static int read_device_cb(const struct nlmsghdr *nlh, void *data)
+// {
+// 	return mnl_attr_parse(nlh, sizeof(struct genlmsghdr), parse_device, data);
+// }
+
+// static int kernel_get_device(struct wgdevice **device, const char *iface)
+// {
+// 	int ret;
+// 	struct nlmsghdr *nlh;
+// 	struct mnlg_socket *nlg;
+
+// 	/* libmnl doesn't check the buffer size, so enforce that before using. */
+// 	if (strlen(iface) >= IFNAMSIZ) {
+// 		errno = ENAMETOOLONG;
+// 		return -ENAMETOOLONG;
+// 	}
+
+// try_again:
+// 	ret = 0;
+// 	*device = calloc(1, sizeof(**device));
+// 	if (!*device)
+// 		return -errno;
+
+// 	nlg = mnlg_socket_open(WG_GENL_NAME, WG_GENL_VERSION);
+// 	if (!nlg) {
+// 		free_wgdevice(*device);
+// 		*device = NULL;
+// 		return -errno;
+// 	}
+
+// 	nlh = mnlg_msg_prepare(nlg, WG_CMD_GET_DEVICE, NLM_F_REQUEST | NLM_F_ACK | NLM_F_DUMP);
+// 	mnl_attr_put_strz(nlh, WGDEVICE_A_IFNAME, iface);
+// 	if (mnlg_socket_send(nlg, nlh) < 0) {
+// 		ret = -errno;
+// 		goto out;
+// 	}
+// 	errno = 0;
+// 	if (mnlg_socket_recv_run(nlg, read_device_cb, *device) < 0) {
+// 		ret = errno ? -errno : -EINVAL;
+// 		goto out;
+// 	}
+// 	coalesce_peers(*device);
+
+// out:
+// 	if (nlg)
+// 		mnlg_socket_close(nlg);
+// 	if (ret) {
+// 		free_wgdevice(*device);
+// 		if (ret == -EINTR)
+// 			goto try_again;
+// 		*device = NULL;
+// 	}
+// 	errno = -ret;
+// 	return ret;
+// }
 
 
 
