@@ -207,21 +207,23 @@ int parse_netdev_buffer(
                     // Host
                     host_start = value_start;
                     if (buffer[host_start] == '[' && buffer[host_end - 1] == ']') {
+                        println_info("IPv6");
                         ++host_start;
                         --host_end;
                         if (host_end <= host_start) continue; // Illegal
                     }
-                    len_host = host_end - value_start;
+                    len_host = host_end - host_start;
                     // Read
                     len_port = min2(len_port, sizeof buffer_port - 1);
                     memcpy(buffer_port, buffer + port_start, len_port);
                     buffer_port[len_port] = '\0';
-                    if (sscanf(buffer + host_end + 1, "%hu", &peer->endpoint_port) != 1) {
-                        println_error("Endpoint port ('%s') could not be parsed", buffer_port);
-                        continue;
-                    }
+                    peer->endpoint_port = strtoul(buffer_port, NULL, 10);
+                    // if (sscanf(buffer + host_end + 1, "%hu", &peer->endpoint_port) != 1) {
+                    //     println_error("Endpoint port ('%s') could not be parsed", buffer_port);
+                    //     continue;
+                    // }
                     peer->len_endpoint_host = min2(len_host, sizeof peer->endpoint_host - 1);
-                    memcpy(peer->endpoint_host, value, peer->len_endpoint_host);
+                    memcpy(peer->endpoint_host, buffer + host_start, peer->len_endpoint_host);
                     peer->endpoint_host[peer->len_endpoint_host] = '\0';
                 }
                 break;
