@@ -18,6 +18,8 @@
 #include <linux/wireguard.h>
 /* Network */
 #include <sys/socket.h>
+#include <sys/types.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 /* Library */
@@ -53,8 +55,8 @@
 #define LEN_KEY_PUBLICKEY (sizeof KEY_PUBLICKEY) - 1
 #define LEN_KEY_ENDPOINT (sizeof KEY_ENDPOINT) - 1
 #define LEN_DOMAIN 255
-#define LEN_KEY_RAW 32
-#define LEN_KEY_BASE64 ((((LEN_KEY_RAW) + 2) / 3) * 4)
+#define LEN_WGKEY_RAW 32
+#define LEN_WGKEY_BASE64 ((((LEN_WGKEY_RAW) + 2) / 3) * 4)
 
 enum host_type {
     host_type_domain,
@@ -75,7 +77,7 @@ struct endpoint_domain {
 };
 
 struct peer {
-    uint8_t public_key[LEN_KEY_RAW]; // len = 44
+    uint8_t public_key[LEN_WGKEY_RAW]; // len = 44
     union {
         struct {
             char domain[LEN_DOMAIN + 1];
@@ -142,15 +144,15 @@ static inline void encode_base64(char dest[static 4], const uint8_t src[static 3
 
 }
 
-void key_to_base64(char base64[static LEN_KEY_BASE64 + 1], const uint8_t key[static LEN_KEY_RAW])
+void key_to_base64(char base64[static LEN_WGKEY_BASE64 + 1], const uint8_t key[static LEN_WGKEY_RAW])
 {
 	unsigned int i;
 
 	for (i = 0; i < WG_KEY_LEN / 3; ++i)
 		encode_base64(&base64[i * 4], &key[i * 3]);
 	encode_base64(&base64[i * 4], (const uint8_t[]){ key[i * 3 + 0], key[i * 3 + 1], 0 });
-	base64[LEN_KEY_BASE64 - 1] = '=';
-	base64[LEN_KEY_BASE64] = '\0';
+	base64[LEN_WGKEY_BASE64 - 1] = '=';
+	base64[LEN_WGKEY_BASE64] = '\0';
 }
 
 static inline int decode_base64(const char src[static 4])
@@ -168,13 +170,13 @@ static inline int decode_base64(const char src[static 4])
 	return val;
 }
 
-bool key_from_base64(uint8_t key[static LEN_KEY_RAW], const char *base64)
+bool key_from_base64(uint8_t key[static LEN_WGKEY_RAW], const char *base64)
 {
 	unsigned int i;
 	volatile uint8_t ret = 0;
 	int val;
 
-	if (base64[LEN_KEY_BASE64 - 1] != '=')
+	if (base64[LEN_WGKEY_BASE64 - 1] != '=')
 		return false;
 
 	for (i = 0; i < WG_KEY_LEN / 3; ++i) {
@@ -338,7 +340,7 @@ int parse_netdev_buffer(
             switch (len_key) {
             case LEN_KEY_PUBLICKEY:
                 if (!strncmp(key, KEY_PUBLICKEY, LEN_KEY_PUBLICKEY)) {
-                    if (len_value != LEN_KEY_BASE64) {
+                    if (len_value != LEN_WGKEY_BASE64) {
                         println_error("Pubkey length is not right (%lu)", len_value);
                         r = -1;
                         goto free_peers;
@@ -423,7 +425,7 @@ unsigned short peers_partition(
     pivot = peers[high].public_key;
     i = low - 1;
     for (j = low; j < high; ++j) {
-        if (strncmp(peers[j].public_key, pivot, (sizeof peers->public_key) - 1) < 0) {
+        if (memcmp(peers[j].public_key, pivot, LEN_WGKEY_RAW) < 0) {
             peers_swap_item(peers, ++i, j);
         }
     }
@@ -593,8 +595,8 @@ static int parse_peer(
 
 	switch (mnl_attr_get_type(attr)) {
 	case WGPEER_A_PUBLIC_KEY:
-		if (mnl_attr_get_payload_len(attr) == LEN_KEY_RAW) {
-			memcpy(peer->public_key, mnl_attr_get_payload(attr), LEN_KEY_RAW);
+		if (mnl_attr_get_payload_len(attr) == LEN_WGKEY_RAW) {
+			memcpy(peer->public_key, mnl_attr_get_payload(attr), LEN_WGKEY_RAW);
             peer_with_public_status->with_pubkey = true;
         } else {
             println_warn("Public key length not right: %hu", mnl_attr_get_payload_len(attr));
@@ -715,6 +717,7 @@ int get_interface_peers(
             }
             r = -1;
         } else {
+            sort_netdev_peers(interface);
             r = 0;
         }
         close_socket:
@@ -731,6 +734,10 @@ int update_netdev(
 ) {
     unsigned short i;
     struct peer const *restrict peer_netdev, *restrict peer_interface;
+    struct addrinfo *addrinfos, *addrinfo;
+    bool need_update;
+
+    if (!netdev->peers_count) return 0;
     // Init buffer interface
     memcpy(interface->name, netdev->name, netdev->len_name + 1);
     interface->len_name = netdev->len_name;
@@ -747,7 +754,25 @@ int update_netdev(
         peer_netdev = netdev->peers + i;
         if (peer_netdev->endpoint_type != host_type_domain) continue;
         peer_interface = interface->peers + i;
-        // 
+        if (memcmp(peer_netdev->public_key, peer_interface->public_key, LEN_WGKEY_RAW)) {
+            println_error("Peer different on interface");
+            return -1;
+        }
+        if (getaddrinfo(peer_netdev->endpoint_host.domain, NULL, NULL, &addrinfos)) {
+            println_warn("Failed to resolve DNS for '%s'", peer_netdev->endpoint_host.domain);
+            continue;
+        }
+        for (addrinfo = addrinfos; addrinfo; addrinfo = addrinfo->ai_next) {
+            switch (addrinfo->ai_family) {
+            case AF_INET:
+                // addrinfo->
+                break;
+            case AF_INET6:
+                break;
+            default:
+                break;
+            }
+        }
         switch (peer_interface->endpoint_type) {
         case host_type_ipv4:
             break;
@@ -773,6 +798,10 @@ int update_netdevs_forever(
     for (i = 0; i < netdevs_count; ++i) {
         netdev = netdevs + i;
         if (netdev->peers_count > max_peers) max_peers = netdev->peers_count;
+    }
+    if (!max_peers) {
+        println_error("No peers defined for any interface");
+        return -1;
     }
     if (init_netdev_peers(&interface, max_peers)) {
         return -1;
