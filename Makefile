@@ -1,5 +1,5 @@
 BIN := sd-networkd-wg-ddns
-CFLAGS ?= -Wall -Wextra
+CFLAGS ?= -Wall -Wextra -std=gnu11
 
 all: ${BIN}
 
@@ -8,4 +8,9 @@ install:
 	install -DTm644 ${BIN}@.timer ${DESTDIR}/usr/lib/systemd/system/${BIN}@.timer
 	install -DTm755 ${BIN}.py ${DESTDIR}/usr/bin/${BIN}.py
 
-.PHONY: all install
+clean:
+	rm -f ${BIN}
+
+fresh: clean all
+
+.PHONY: all install clean fresh
