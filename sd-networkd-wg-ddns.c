@@ -2,6 +2,7 @@
 #include <asm-generic/errno-base.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,8 +52,9 @@
 #define LEN_VALUE_WIREGUARD (sizeof VALUE_WIREGUARD) -1
 #define LEN_KEY_PUBLICKEY (sizeof KEY_PUBLICKEY) - 1
 #define LEN_KEY_ENDPOINT (sizeof KEY_ENDPOINT) - 1
-#define LEN_PUBLICKEY 44
 #define LEN_DOMAIN 255
+#define LEN_KEY_RAW 32
+#define LEN_KEY_BASE64 ((((LEN_KEY_RAW) + 2) / 3) * 4)
 
 enum host_type {
     host_type_domain,
@@ -73,7 +75,7 @@ struct endpoint_domain {
 };
 
 struct peer {
-    char public_key[LEN_PUBLICKEY + 1]; // len = 44
+    uint8_t public_key[LEN_KEY_RAW]; // len = 44
     union {
         struct {
             char domain[LEN_DOMAIN + 1];
@@ -118,13 +120,76 @@ int init_netdev_peers(struct netdev *const restrict netdev, unsigned short peers
 
 void init_peer(struct peer *const restrict peer) {
     peer->public_key[0] = '\0';
-    peer->public_key[LEN_PUBLICKEY] = '\0';
     peer->endpoint_host.domain[0] = '\0';
     peer->endpoint_host.len_domain = 0;
     peer->endpoint_port = 0;
     peer->endpoint_type = host_type_domain;
     peer->last_handshake.tv_nsec = 0;
     peer->last_handshake.tv_sec = 0;
+}
+
+/* encode_base64, key_to_base64, decode_base64, key_from_base64 are borrowed from wireguard-tools/src/encoding.c */
+static inline void encode_base64(char dest[static 4], const uint8_t src[static 3])
+{
+	uint8_t const input[] = { (src[0] >> 2) & 63, ((src[0] << 4) | (src[1] >> 4)) & 63, ((src[1] << 2) | (src[2] >> 6)) & 63, src[2] & 63 };
+
+	for (unsigned int i = 0; i < 4; ++i)
+		dest[i] = input[i] + 'A'
+			  + (((25 - input[i]) >> 8) & 6)
+			  - (((51 - input[i]) >> 8) & 75)
+			  - (((61 - input[i]) >> 8) & 15)
+			  + (((62 - input[i]) >> 8) & 3);
+
+}
+
+void key_to_base64(char base64[static LEN_KEY_BASE64 + 1], const uint8_t key[static LEN_KEY_RAW])
+{
+	unsigned int i;
+
+	for (i = 0; i < WG_KEY_LEN / 3; ++i)
+		encode_base64(&base64[i * 4], &key[i * 3]);
+	encode_base64(&base64[i * 4], (const uint8_t[]){ key[i * 3 + 0], key[i * 3 + 1], 0 });
+	base64[LEN_KEY_BASE64 - 1] = '=';
+	base64[LEN_KEY_BASE64] = '\0';
+}
+
+static inline int decode_base64(const char src[static 4])
+{
+	int val = 0;
+
+	for (unsigned int i = 0; i < 4; ++i)
+		val |= (-1
+			    + ((((('A' - 1) - src[i]) & (src[i] - ('Z' + 1))) >> 8) & (src[i] - 64))
+			    + ((((('a' - 1) - src[i]) & (src[i] - ('z' + 1))) >> 8) & (src[i] - 70))
+			    + ((((('0' - 1) - src[i]) & (src[i] - ('9' + 1))) >> 8) & (src[i] + 5))
+			    + ((((('+' - 1) - src[i]) & (src[i] - ('+' + 1))) >> 8) & 63)
+			    + ((((('/' - 1) - src[i]) & (src[i] - ('/' + 1))) >> 8) & 64)
+			) << (18 - 6 * i);
+	return val;
+}
+
+bool key_from_base64(uint8_t key[static LEN_KEY_RAW], const char *base64)
+{
+	unsigned int i;
+	volatile uint8_t ret = 0;
+	int val;
+
+	if (base64[LEN_KEY_BASE64 - 1] != '=')
+		return false;
+
+	for (i = 0; i < WG_KEY_LEN / 3; ++i) {
+		val = decode_base64(&base64[i * 4]);
+		ret |= (uint32_t)val >> 31;
+		key[i * 3 + 0] = (val >> 16) & 0xff;
+		key[i * 3 + 1] = (val >> 8) & 0xff;
+		key[i * 3 + 2] = val & 0xff;
+	}
+	val = decode_base64((const char[]){ base64[i * 4 + 0], base64[i * 4 + 1], base64[i * 4 + 2], 'A' });
+	ret |= ((uint32_t)val >> 31) | (val & 0xff);
+	key[i * 3 + 0] = (val >> 16) & 0xff;
+	key[i * 3 + 1] = (val >> 8) & 0xff;
+
+	return 1 & ((ret - 1) >> 8);
 }
 
 void peer_endpoint_fill_host(
@@ -273,13 +338,15 @@ int parse_netdev_buffer(
             switch (len_key) {
             case LEN_KEY_PUBLICKEY:
                 if (!strncmp(key, KEY_PUBLICKEY, LEN_KEY_PUBLICKEY)) {
-                    if (len_value != LEN_PUBLICKEY) {
+                    if (len_value != LEN_KEY_BASE64) {
                         println_error("Pubkey length is not right (%lu)", len_value);
                         r = -1;
                         goto free_peers;
                     }
-                    memcpy(peer->public_key, value, LEN_PUBLICKEY);
-                    // peer->public_key[LEN_PUBLICKEY] = '\0';
+                    if (!key_from_base64(peer->public_key, value)) {
+                        r = -1;
+                        goto free_peers;
+                    }
                 }
                 break;
             case LEN_KEY_ENDPOINT:
@@ -394,7 +461,7 @@ void dump_netdev(
     for (i = 0; i < netdev->peers_count; ++i) {
         println_info(" => Peer %hu:", i);
         peer = netdev->peers + i;
-        println_info("  -> Public Key: %s", peer->public_key);
+        // println_info("  -> Public Key: %s", peer->public_key);
         // println_info("  -> Host: %s", peer->endpoint_host);
         println_info("  -> Host type: %s", host_type_strings[peer->endpoint_type]);
         // println_info("  -> Port: %hu", peer->endpoint_port);
@@ -510,18 +577,28 @@ close_configs:
     return r;
 }
 
+struct peer_with_public_status {
+    struct peer *const restrict peer;
+    bool with_pubkey;
+};
 
 static int parse_peer(
     struct nlattr const *const restrict attr, 
     void *data
 ) {
-    struct peer *const restrict peer = data;
+    struct peer_with_public_status *const restrict peer_with_public_status = data;
+    struct peer *const restrict peer = peer_with_public_status->peer;
+
     struct sockaddr *addr;
 
 	switch (mnl_attr_get_type(attr)) {
 	case WGPEER_A_PUBLIC_KEY:
-		if (mnl_attr_get_payload_len(attr) == LEN_PUBLICKEY) 
-			memcpy(peer->public_key, mnl_attr_get_payload(attr), LEN_PUBLICKEY);
+		if (mnl_attr_get_payload_len(attr) == LEN_KEY_RAW) {
+			memcpy(peer->public_key, mnl_attr_get_payload(attr), LEN_KEY_RAW);
+            peer_with_public_status->with_pubkey = true;
+        } else {
+            println_warn("Public key length not right: %hu", mnl_attr_get_payload_len(attr));
+        }
 		break;
 	case WGPEER_A_ENDPOINT:
 		if (mnl_attr_get_payload_len(attr) < sizeof *addr)
@@ -531,16 +608,20 @@ static int parse_peer(
             peer->endpoint_type = host_type_ipv4;
             peer->endpoint_host.ipv4 = ((struct sockaddr_in *)addr)->sin_addr;
             peer->endpoint_port = ((struct sockaddr_in *)addr)->sin_port;
-        }
-		else if (addr->sa_family == AF_INET6 && mnl_attr_get_payload_len(attr) == sizeof(struct sockaddr_in6)) {
+        } else if (addr->sa_family == AF_INET6 && mnl_attr_get_payload_len(attr) == sizeof(struct sockaddr_in6)) {
             peer->endpoint_type = host_type_ipv6;
             peer->endpoint_host.ipv6 = ((struct sockaddr_in6 *)addr)->sin6_addr;
             peer->endpoint_port = ((struct sockaddr_in6 *)addr)->sin6_port;
+        } else {
+            println_warn("Endpoint is neither v4 nor v6");
         }
 		break;
 	case WGPEER_A_LAST_HANDSHAKE_TIME:
-		if (mnl_attr_get_payload_len(attr) == sizeof(peer->last_handshake))
+		if (mnl_attr_get_payload_len(attr) == sizeof(peer->last_handshake)) {
 			memcpy(&peer->last_handshake, mnl_attr_get_payload(attr), sizeof(peer->last_handshake));
+        } else {
+            println_warn("Last handshake time size not right");
+        }
 		break;
     default:
         break;
@@ -562,9 +643,10 @@ int parse_peers(
         return MNL_CB_ERROR;
     }
     init_peer(peer);
-    r = mnl_attr_parse_nested(attr, parse_peer, peer);
+    struct peer_with_public_status peer_with_public_status = {peer, false};
+    r = mnl_attr_parse_nested(attr, parse_peer, &peer_with_public_status);
 	if (!r) return r;
-    if (!peer->public_key[0]) {
+    if (!peer_with_public_status.with_pubkey) {
         println_error("Peer public key is empty");
         return MNL_CB_ERROR;
     }
