@@ -1,5 +1,5 @@
 BIN := sd-networkd-wg-ddns
-CFLAGS ?= -Wall -Wextra -std=gnu11
+CFLAGS ?= -Wall -Wextra -std=gnu11 -O3
 
 all: ${BIN}
 

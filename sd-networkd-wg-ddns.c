@@ -1,9 +1,12 @@
 /* C */
+#include <asm-generic/errno-base.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
+#include <time.h>
 /* POSIX */
 #include <dirent.h>
 #include <fcntl.h>
@@ -48,6 +51,8 @@
 #define LEN_VALUE_WIREGUARD (sizeof VALUE_WIREGUARD) -1
 #define LEN_KEY_PUBLICKEY (sizeof KEY_PUBLICKEY) - 1
 #define LEN_KEY_ENDPOINT (sizeof KEY_ENDPOINT) - 1
+#define LEN_PUBLICKEY 44
+#define LEN_DOMAIN 255
 
 enum host_type {
     host_type_domain,
@@ -61,19 +66,31 @@ char *host_type_strings[] = {
     "IPv6"
 };
 
+struct endpoint_domain {
+    char name[LEN_DOMAIN + 1]; // len = 255 (max length of domain name)
+    unsigned short len_name;
+    in_port_t port;
+};
+
 struct peer {
-    char public_key[45]; // len = 44
-    char endpoint_host[256]; // len = 255 (max length of domain name)
-    enum host_type endpoint_host_type;
-    unsigned short endpoint_port;
-    unsigned short len_public_key;
-    unsigned short len_endpoint_host;
-    unsigned long latest_handshake;
+    char public_key[LEN_PUBLICKEY + 1]; // len = 44
+    union {
+        struct {
+            char domain[LEN_DOMAIN + 1];
+            unsigned short len_domain;
+        };
+        struct in6_addr ipv6;
+        struct in_addr ipv4;
+    } endpoint_host;
+    in_port_t endpoint_port;
+    enum host_type endpoint_type;
+    struct timespec last_handshake;
 };
 
 struct netdev {
     char name[IFNAMSIZ]; // len = 15
     unsigned short len_name;
+    uint32_t ifindex;
     struct peer *peers;
     unsigned short peers_count;
     unsigned short peers_allocated;
@@ -87,15 +104,61 @@ enum parse_status {
 };
 
 
-int init_netdev_peers(struct netdev *const restrict netdev) {
-    netdev->peers = malloc(sizeof *netdev->peers * ALLOC_BASE);
+int init_netdev_peers(struct netdev *const restrict netdev, unsigned short peers_allocated) {
+    if (!peers_allocated) peers_allocated = ALLOC_BASE;
+    netdev->peers = malloc(sizeof *netdev->peers * peers_allocated);
     if (!netdev->peers) {
         println_error_with_errno("Failed to allocate memory for peers");
         return -1;
     }
-    netdev->peers_allocated = ALLOC_BASE;
+    netdev->peers_allocated = peers_allocated;
     netdev->peers_count = 0;
     return 0;
+}
+
+void init_peer(struct peer *const restrict peer) {
+    peer->public_key[0] = '\0';
+    peer->public_key[LEN_PUBLICKEY] = '\0';
+    peer->endpoint_host.domain[0] = '\0';
+    peer->endpoint_host.len_domain = 0;
+    peer->endpoint_port = 0;
+    peer->endpoint_type = host_type_domain;
+    peer->last_handshake.tv_nsec = 0;
+    peer->last_handshake.tv_sec = 0;
+}
+
+void peer_endpoint_fill_host(
+    struct peer *const restrict peer,
+    char const *const restrict host,
+    unsigned short len_host
+) {
+    bool could_v4;
+    char buffer[LEN_DOMAIN + 1];
+
+    len_host = min2(len_host, (sizeof buffer) - 1);
+    if (host[0] == '[' && host[len_host] == ']') { // Definitely not v4
+        could_v4 = false;
+    } else {
+        could_v4 = true;
+    }
+    memcpy(buffer, host + 1, len_host - 2);
+    buffer[len_host - 2] = '\0';
+    if (inet_pton(AF_INET6, buffer, &peer->endpoint_host.ipv6) == 1) { // Is v6
+        peer->endpoint_type = host_type_ipv6;
+        return;
+    }
+    if (could_v4) {
+        memcpy(buffer, host, len_host);
+        buffer[len_host] = '\0';
+        if (inet_pton(AF_INET, buffer, &peer->endpoint_host.ipv4) == 1) {
+            peer->endpoint_type = host_type_ipv4;
+            return;
+        }
+    }
+    memcpy(peer->endpoint_host.domain, host, len_host);
+    peer->endpoint_host.domain[len_host] = '\0';
+    peer->endpoint_host.len_domain = len_host;
+    peer->endpoint_type = host_type_domain;
 }
 
 int parse_netdev_buffer(
@@ -108,14 +171,14 @@ int parse_netdev_buffer(
     enum parse_status parse_status;
     char const *key, *value;
     char buffer_port[6];
-    struct in6_addr buffer_in6;
     int r;
 
-    if (init_netdev_peers(netdev)) {
+    if (init_netdev_peers(netdev, ALLOC_BASE)) {
         return -1;
     }
     netdev->name[0] = '\0';
     netdev->len_name = 0;
+    netdev->ifindex = -1;
 
     parse_status = parse_status_none;
     for (line_start = 0; line_start < size_buffer; line_start = line_end + 1) {
@@ -137,12 +200,12 @@ int parse_netdev_buffer(
                 goto free_peers;
             }
             ++key;
-            if (len_stripped == sizeof TITLE_NETDEV + 1 &&
-                !strncmp(key, TITLE_NETDEV, sizeof TITLE_NETDEV - 1)) 
+            if (len_stripped == (sizeof TITLE_NETDEV) + 1 &&
+                !strncmp(key, TITLE_NETDEV, (sizeof TITLE_NETDEV) - 1)) 
             {
                 parse_status = parse_status_netdev_section;
-            } else if (len_stripped == sizeof TITLE_PEER + 1 &&
-                !strncmp(key, TITLE_PEER, sizeof TITLE_PEER - 1)) 
+            } else if (len_stripped == (sizeof TITLE_PEER) + 1 &&
+                !strncmp(key, TITLE_PEER, (sizeof TITLE_PEER) - 1)) 
             {
                 ++netdev->peers_count;
                 if (netdev->peers_count > netdev->peers_allocated) {
@@ -166,13 +229,7 @@ int parse_netdev_buffer(
                     netdev->peers = peers_buffer;
                 }
                 peer = netdev->peers + netdev->peers_count - 1;
-                peer->latest_handshake = 0;
-                peer->endpoint_host[0] = '\0';
-                peer->len_endpoint_host = 0;
-                peer->endpoint_port = 0;
-                peer->public_key[0] = '\0';
-                peer->len_public_key = 0;
-                peer->endpoint_host_type = host_type_domain;
+                init_peer(peer);
                 parse_status = parse_status_peer_section;
             } else {
                 parse_status = parse_status_other_section;
@@ -205,7 +262,7 @@ int parse_netdev_buffer(
                         goto free_peers;
                     }
                 } else if (!strncmp(key, KEY_NAME, LEN_KEY_NAME)) {
-                    netdev->len_name = min2(len_value, sizeof netdev->name - 1);
+                    netdev->len_name = min2(len_value, (sizeof netdev->name) - 1);
                     memcpy(netdev->name, value, netdev->len_name);
                     netdev->name[netdev->len_name] = '\0';
                 }
@@ -216,9 +273,13 @@ int parse_netdev_buffer(
             switch (len_key) {
             case LEN_KEY_PUBLICKEY:
                 if (!strncmp(key, KEY_PUBLICKEY, LEN_KEY_PUBLICKEY)) {
-                    peer->len_public_key = min2(len_value, sizeof peer->public_key - 1);
-                    memcpy(peer->public_key, value, peer->len_public_key);
-                    peer->public_key[peer->len_public_key] = '\0';
+                    if (len_value != LEN_PUBLICKEY) {
+                        println_error("Pubkey length is not right (%lu)", len_value);
+                        r = -1;
+                        goto free_peers;
+                    }
+                    memcpy(peer->public_key, value, LEN_PUBLICKEY);
+                    // peer->public_key[LEN_PUBLICKEY] = '\0';
                 }
                 break;
             case LEN_KEY_ENDPOINT:
@@ -231,51 +292,12 @@ int parse_netdev_buffer(
                     port_start = host_end + 1;
                     if (port_start >= stripped_end) continue; // Illegal
                     len_port = stripped_end - port_start;
-                    // Host
-                    host_start = value_start;
-                    len_host = host_end - host_start;
-                    if (buffer[host_start] == '[' && buffer[host_end - 1] == ']') {
-                        // Check if is v6
-                        if (host_end > host_start + 2) { // Could be
-                            ++host_start;
-                            --host_end;
-                            len_host -= 2;
-                            len_host = min2(len_host, sizeof peer->endpoint_host - 1);
-                            memcpy(peer->endpoint_host, buffer + host_start, len_host);
-                            peer->endpoint_host[len_host] = '\0';
-                            if (inet_pton(AF_INET6, peer->endpoint_host, &buffer_in6) == 1) { // Is v6
-                                peer->endpoint_host_type = host_type_ipv6;
-                                peer->len_endpoint_host = len_host;
-                            } else {
-                                peer->endpoint_host_type = host_type_domain;
-                                --host_start;
-                                ++host_end;
-                                len_host += 2;
-                            }
-                        } else { // Could not be
-                            peer->endpoint_host_type = host_type_domain;   
-                        }
-                        if (peer->endpoint_host_type != host_type_ipv6) {
-                            peer->len_endpoint_host = min2(len_host, sizeof peer->endpoint_host - 1);
-                            memcpy(peer->endpoint_host, buffer + host_start, peer->len_endpoint_host);
-                            peer->endpoint_host[peer->len_endpoint_host] = '\0';
-                        }
-                    } else {
-                        len_host = min2(len_host, sizeof peer->endpoint_host - 1);
-                        memcpy(peer->endpoint_host, buffer + host_start, len_host);
-                        peer->endpoint_host[len_host] = '\0';
-                        if (inet_pton(AF_INET, peer->endpoint_host, &buffer_in6) == 1) {
-                            peer->endpoint_host_type = host_type_ipv4;
-                        } else {
-                            peer->endpoint_host_type = host_type_domain;
-                        }
-                        peer->len_endpoint_host = len_host;
-                    }
-                    // Read
-                    len_port = min2(len_port, sizeof buffer_port - 1);
+                    len_port = min2(len_port, (sizeof buffer_port) - 1);
                     memcpy(buffer_port, buffer + port_start, len_port);
                     buffer_port[len_port] = '\0';
                     peer->endpoint_port = strtoul(buffer_port, NULL, 10);
+                    // Host
+                    peer_endpoint_fill_host(peer, value, host_end - value_start);
                 }
                 break;
             }
@@ -310,6 +332,58 @@ free_peers:
     return r;
 }
 
+void peers_swap_item(
+    struct peer *const restrict peers,
+    unsigned short const some,
+    unsigned short const other
+) {
+    struct peer peer;
+
+    if (some == other) return;
+    peer = peers[some];
+    peers[some] = peers[other];
+    peers[other] = peer;
+}
+
+unsigned short peers_partition(
+    struct peer *const restrict peers,
+    unsigned short const low,
+    unsigned short const high
+) {
+    unsigned short i, j;
+    char const *pivot;
+    
+    pivot = peers[high].public_key;
+    i = low - 1;
+    for (j = low; j < high; ++j) {
+        if (strncmp(peers[j].public_key, pivot, (sizeof peers->public_key) - 1) < 0) {
+            peers_swap_item(peers, ++i, j);
+        }
+    }
+    peers_swap_item(peers, ++i, high);
+    return i;
+
+}
+
+void peers_quick_sort(
+    struct peer *const restrict peers,
+    unsigned short const low,
+    unsigned short const high
+) {
+    unsigned short pivot;
+
+    if (low >= high) return;
+    pivot = peers_partition(peers, low, high);
+    if (pivot) peers_quick_sort(peers, low, pivot - 1);
+    peers_quick_sort(peers, pivot + 1, high);
+}
+
+void sort_netdev_peers(
+    struct netdev *const restrict netdev
+) {
+    peers_quick_sort(netdev->peers, 0, netdev->peers_count - 1);
+}
+
 void dump_netdev(
     struct netdev const *const restrict netdev
 ) {
@@ -321,9 +395,9 @@ void dump_netdev(
         println_info(" => Peer %hu:", i);
         peer = netdev->peers + i;
         println_info("  -> Public Key: %s", peer->public_key);
-        println_info("  -> Host: %s", peer->endpoint_host);
-        println_info("  -> Host type: %s", host_type_strings[peer->endpoint_host_type]);
-        println_info("  -> Port: %hu", peer->endpoint_port);
+        // println_info("  -> Host: %s", peer->endpoint_host);
+        println_info("  -> Host type: %s", host_type_strings[peer->endpoint_type]);
+        // println_info("  -> Port: %hu", peer->endpoint_port);
     }
 }
 
@@ -371,6 +445,7 @@ int parse_netdev_config(
         r = -1;
         goto free_buffer;
     }
+    sort_netdev_peers(netdev);
     dump_netdev(netdev);
     r = 0;
 free_buffer:
@@ -436,199 +511,203 @@ close_configs:
 }
 
 
-// static int parse_peer(const struct nlattr *attr, void *data)
-// {
-// 	struct wgpeer *peer = data;
+static int parse_peer(
+    struct nlattr const *const restrict attr, 
+    void *data
+) {
+    struct peer *const restrict peer = data;
+    struct sockaddr *addr;
 
-// 	switch (mnl_attr_get_type(attr)) {
-// 	case WGPEER_A_UNSPEC:
-// 		break;
-// 	case WGPEER_A_PUBLIC_KEY:
-// 		if (mnl_attr_get_payload_len(attr) == sizeof(peer->public_key)) {
-// 			memcpy(peer->public_key, mnl_attr_get_payload(attr), sizeof(peer->public_key));
-// 			peer->flags |= WGPEER_HAS_PUBLIC_KEY;
-// 		}
-// 		break;
-// 	case WGPEER_A_PRESHARED_KEY:
-// 		if (mnl_attr_get_payload_len(attr) == sizeof(peer->preshared_key)) {
-// 			memcpy(peer->preshared_key, mnl_attr_get_payload(attr), sizeof(peer->preshared_key));
-// 			if (!key_is_zero(peer->preshared_key))
-// 				peer->flags |= WGPEER_HAS_PRESHARED_KEY;
-// 		}
-// 		break;
-// 	case WGPEER_A_ENDPOINT: {
-// 		struct sockaddr *addr;
+	switch (mnl_attr_get_type(attr)) {
+	case WGPEER_A_PUBLIC_KEY:
+		if (mnl_attr_get_payload_len(attr) == LEN_PUBLICKEY) 
+			memcpy(peer->public_key, mnl_attr_get_payload(attr), LEN_PUBLICKEY);
+		break;
+	case WGPEER_A_ENDPOINT:
+		if (mnl_attr_get_payload_len(attr) < sizeof *addr)
+			break;
+		addr = mnl_attr_get_payload(attr);
+		if (addr->sa_family == AF_INET && mnl_attr_get_payload_len(attr) == sizeof(struct sockaddr_in)) {
+            peer->endpoint_type = host_type_ipv4;
+            peer->endpoint_host.ipv4 = ((struct sockaddr_in *)addr)->sin_addr;
+            peer->endpoint_port = ((struct sockaddr_in *)addr)->sin_port;
+        }
+		else if (addr->sa_family == AF_INET6 && mnl_attr_get_payload_len(attr) == sizeof(struct sockaddr_in6)) {
+            peer->endpoint_type = host_type_ipv6;
+            peer->endpoint_host.ipv6 = ((struct sockaddr_in6 *)addr)->sin6_addr;
+            peer->endpoint_port = ((struct sockaddr_in6 *)addr)->sin6_port;
+        }
+		break;
+	case WGPEER_A_LAST_HANDSHAKE_TIME:
+		if (mnl_attr_get_payload_len(attr) == sizeof(peer->last_handshake))
+			memcpy(&peer->last_handshake, mnl_attr_get_payload(attr), sizeof(peer->last_handshake));
+		break;
+    default:
+        break;
+	}
+	return MNL_CB_OK;
+}
 
-// 		if (mnl_attr_get_payload_len(attr) < sizeof(*addr))
-// 			break;
-// 		addr = mnl_attr_get_payload(attr);
-// 		if (addr->sa_family == AF_INET && mnl_attr_get_payload_len(attr) == sizeof(peer->endpoint.addr4))
-// 			memcpy(&peer->endpoint.addr4, addr, sizeof(peer->endpoint.addr4));
-// 		else if (addr->sa_family == AF_INET6 && mnl_attr_get_payload_len(attr) == sizeof(peer->endpoint.addr6))
-// 			memcpy(&peer->endpoint.addr6, addr, sizeof(peer->endpoint.addr6));
-// 		break;
-// 	}
-// 	case WGPEER_A_PERSISTENT_KEEPALIVE_INTERVAL:
-// 		if (!mnl_attr_validate(attr, MNL_TYPE_U16))
-// 			peer->persistent_keepalive_interval = mnl_attr_get_u16(attr);
-// 		break;
-// 	case WGPEER_A_LAST_HANDSHAKE_TIME:
-// 		if (mnl_attr_get_payload_len(attr) == sizeof(peer->last_handshake_time))
-// 			memcpy(&peer->last_handshake_time, mnl_attr_get_payload(attr), sizeof(peer->last_handshake_time));
-// 		break;
-// 	case WGPEER_A_RX_BYTES:
-// 		if (!mnl_attr_validate(attr, MNL_TYPE_U64))
-// 			peer->rx_bytes = mnl_attr_get_u64(attr);
-// 		break;
-// 	case WGPEER_A_TX_BYTES:
-// 		if (!mnl_attr_validate(attr, MNL_TYPE_U64))
-// 			peer->tx_bytes = mnl_attr_get_u64(attr);
-// 		break;
-// 	case WGPEER_A_ALLOWEDIPS:
-// 		return mnl_attr_parse_nested(attr, parse_allowedips, peer);
-// 	}
+int parse_peers(
+    struct nlattr const *const restrict attr, 
+    void *data
+) {
+    struct netdev *const restrict interface = data;
+    struct peer *const restrict peer = interface->peers + interface->peers_count;
+    int r;
+    
+    ++interface->peers_count;
+    if (interface->peers_count > interface->peers_allocated) {
+        println_error("More peers on interface than config (at least %hu > %hu)", interface->peers_count, interface->peers_allocated);
+        return MNL_CB_ERROR;
+    }
+    init_peer(peer);
+    r = mnl_attr_parse_nested(attr, parse_peer, peer);
+	if (!r) return r;
+    if (!peer->public_key[0]) {
+        println_error("Peer public key is empty");
+        return MNL_CB_ERROR;
+    }
+	return MNL_CB_OK;
+}
 
-// 	return MNL_CB_OK;
-// }
+int parse_interface(
+    struct nlattr const *const restrict attr, 
+    void *data
+) {
+	struct netdev *restrict interface;
 
-// static int parse_peers(const struct nlattr *attr, void *data)
-// {
-// 	struct wgdevice *device = data;
-// 	struct wgpeer *new_peer = calloc(1, sizeof(*new_peer));
-// 	int ret;
-
-// 	if (!new_peer) {
-// 		perror("calloc");
-// 		return MNL_CB_ERROR;
-// 	}
-// 	if (!device->first_peer)
-// 		device->first_peer = device->last_peer = new_peer;
-// 	else {
-// 		device->last_peer->next_peer = new_peer;
-// 		device->last_peer = new_peer;
-// 	}
-// 	ret = mnl_attr_parse_nested(attr, parse_peer, new_peer);
-// 	if (!ret)
-// 		return ret;
-// 	if (!(new_peer->flags & WGPEER_HAS_PUBLIC_KEY))
-// 		return MNL_CB_ERROR;
-// 	return MNL_CB_OK;
-// }
-
-
-// static int parse_interface(
-//     struct nlattr const *const restrict attr, 
-//     void *data
-// ) {
-// 	struct wgdevice *device = data;
-
-// 	switch (mnl_attr_get_type(attr)) {
-// 	case WGDEVICE_A_UNSPEC:
-// 		break;
-// 	case WGDEVICE_A_IFINDEX:
-// 		if (!mnl_attr_validate(attr, MNL_TYPE_U32))
-// 			device->ifindex = mnl_attr_get_u32(attr);
-// 		break;
-// 	case WGDEVICE_A_IFNAME:
-// 		if (!mnl_attr_validate(attr, MNL_TYPE_STRING)) {
-// 			strncpy(device->name, mnl_attr_get_str(attr), sizeof(device->name) - 1);
-// 			device->name[sizeof(device->name) - 1] = '\0';
-// 		}
-// 		break;
-// 	case WGDEVICE_A_PRIVATE_KEY:
-// 		if (mnl_attr_get_payload_len(attr) == sizeof(device->private_key)) {
-// 			memcpy(device->private_key, mnl_attr_get_payload(attr), sizeof(device->private_key));
-// 			device->flags |= WGDEVICE_HAS_PRIVATE_KEY;
-// 		}
-// 		break;
-// 	case WGDEVICE_A_PUBLIC_KEY:
-// 		if (mnl_attr_get_payload_len(attr) == sizeof(device->public_key)) {
-// 			memcpy(device->public_key, mnl_attr_get_payload(attr), sizeof(device->public_key));
-// 			device->flags |= WGDEVICE_HAS_PUBLIC_KEY;
-// 		}
-// 		break;
-// 	case WGDEVICE_A_LISTEN_PORT:
-// 		if (!mnl_attr_validate(attr, MNL_TYPE_U16))
-// 			device->listen_port = mnl_attr_get_u16(attr);
-// 		break;
-// 	case WGDEVICE_A_FWMARK:
-// 		if (!mnl_attr_validate(attr, MNL_TYPE_U32))
-// 			device->fwmark = mnl_attr_get_u32(attr);
-// 		break;
-// 	case WGDEVICE_A_PEERS:
-// 		return mnl_attr_parse_nested(attr, parse_peers, device);
-// 	}
-
-// 	return MNL_CB_OK;
-// }
+    interface = data;
+	switch (mnl_attr_get_type(attr)) {
+	case WGDEVICE_A_IFINDEX:
+		if (!mnl_attr_validate(attr, MNL_TYPE_U32))
+			interface->ifindex = mnl_attr_get_u32(attr);
+		break;
+	case WGDEVICE_A_PEERS:
+		return mnl_attr_parse_nested(attr, parse_peers, interface);
+	}
+    return MNL_CB_OK;
+}
 
 
-// static int get_interface_callback(
-//     struct nlmsghdr const *const restrict message_header, 
-//     void *const restrict data
-// ) {
-// 	return mnl_attr_parse(message_header, sizeof(struct genlmsghdr), parse_device, data);
-// }
+int get_interface_callback(
+    struct nlmsghdr const *const restrict message_header, 
+    void *const restrict data
+) {
+	return mnl_attr_parse(message_header, sizeof(struct genlmsghdr), parse_interface, data);
+}
+
+int get_interface_peers(
+    struct netdev *const restrict interface
+) {
+	struct mnlg_socket *generic_socket;
+	struct nlmsghdr *message_header;
+    int r, last_error;
+
+    last_error = EINTR;
+    while (last_error == EINTR) {
+        interface->peers_count = 0;
+        interface->ifindex = -1;
+        generic_socket = mnlg_socket_open(WG_GENL_NAME, WG_GENL_VERSION);
+        if (!generic_socket) {
+            println_error_with_errno("Failed to open generic socket '%s'", WG_GENL_NAME);
+            return -1;
+        }
+
+        message_header = mnlg_msg_prepare(generic_socket, WG_CMD_GET_DEVICE, NLM_F_REQUEST | NLM_F_ACK | NLM_F_DUMP);
+        mnl_attr_put_strz(message_header, WGDEVICE_A_IFNAME, interface->name);
+        if (mnlg_socket_send(generic_socket, message_header) < 0) {
+            println_error_with_errno("Failed to send message to get wireguard interface");
+            last_error = errno;
+            r = -1;
+            goto close_socket;
+        }
+        errno = 0;
+        if (mnlg_socket_recv_run(generic_socket, get_interface_callback, interface) < 0) {
+            if errno {
+                println_error_with_errno("Failed to run get_interface_callback");
+                last_error = errno;
+            } else {
+                println_error("Failed to run get_interface_callback");
+                last_error = EINVAL;
+            }
+            r = -1;
+        } else {
+            r = 0;
+        }
+        close_socket:
+            mnlg_socket_close(generic_socket);
+        break;
+    }
+    return r;
+}
 
 
-
-// static int get_interface(char const interface[IFNAMSIZ]) {
-// 	struct mnlg_socket *generic_socket;
-// 	struct nlmsghdr *message_header;
-//     struct netdev interace;
-
-//     // if (!init_netdev_peers(struct netdev *const restrict netdev))
-
-//     // interace.len_name = 
-
-//     int r;
-
-// 	generic_socket = mnlg_socket_open(WG_GENL_NAME, WG_GENL_VERSION);
-// 	if (!generic_socket) {
-//         println_error_with_errno("Failed to open generic socket '%s'", WG_GENL_NAME);
-//         return -1;
-// 	}
-
-// 	message_header = mnlg_msg_prepare(generic_socket, WG_CMD_GET_DEVICE, NLM_F_REQUEST | NLM_F_ACK | NLM_F_DUMP);
-// 	mnl_attr_put_strz(message_header, WGDEVICE_A_IFNAME, interface);
-// 	if (mnlg_socket_send(generic_socket, message_header) < 0) {
-//         println_error_with_errno("Failed to send message to get wireguard interface");
-//         r = -1;
-//         goto close_socket;
-// 	}
-// 	errno = 0;
-// 	if (mnlg_socket_recv_run(generic_socket, read_device_cb, *device) < 0) {
-// 		ret = errno ? -errno : -EINVAL;
-// 		goto out;
-// 	}
-// 	// coalesce_peers(*device);
-
-// // out:
-// // 	if (nlg)
-// // 		mnlg_socket_close(nlg);
-// // 	if (ret) {
-// // 		free_wgdevice(*device);
-// // 		if (ret == -EINTR)
-// // 			goto try_again;
-// // 		*device = NULL;
-// // 	}
-// close_socket:
-//     mnlg_socket_close(generic_socket);
-// 	return r;
-// }
-
-
-
-int work(
-    struct netdev const *const restrict netdevs,
-    unsigned short const netdevs_count
+int update_netdev(
+    struct netdev const *const restrict netdev,
+    struct netdev *const restrict interface
 ) {
     unsigned short i;
-
-    for (i = 0; i < netdevs_count; ++i) {
-        println_info("Checking netdev '%s'...", netdevs[i].name);
+    struct peer const *restrict peer_netdev, *restrict peer_interface;
+    // Init buffer interface
+    memcpy(interface->name, netdev->name, netdev->len_name + 1);
+    interface->len_name = netdev->len_name;
+    if (get_interface_peers(interface)) {
+        println_error("Failed to get interface '%s' peers", interface->name);
+        return -1;
     }
-    return 0;
+    if (interface->peers_count != netdev->peers_count) {
+        println_error("Interface peers count (%hu) != netdev peers count (%hu)",
+            interface->peers_count, netdev->peers_count);
+        return -1;
+    }
+    for (i = 0; i < netdev->peers_count; ++i) {
+        peer_netdev = netdev->peers + i;
+        if (peer_netdev->endpoint_type != host_type_domain) continue;
+        peer_interface = interface->peers + i;
+        // 
+        switch (peer_interface->endpoint_type) {
+        case host_type_ipv4:
+            break;
+        case host_type_ipv6:
+            break;
+        default:
+            break;
+        }
+    }
+	return 0;
+}
+
+int update_netdevs_forever(
+    struct netdev const *const restrict netdevs,
+    unsigned short const netdevs_count,
+    unsigned short const interval
+) {
+    struct netdev interface;
+    struct netdev const *netdev;
+    unsigned short i, max_peers;
+
+    max_peers = 0;
+    for (i = 0; i < netdevs_count; ++i) {
+        netdev = netdevs + i;
+        if (netdev->peers_count > max_peers) max_peers = netdev->peers_count;
+    }
+    if (init_netdev_peers(&interface, max_peers)) {
+        return -1;
+    }
+    for(;;) {
+        max_peers = 0;
+        for (i = 0; i < netdevs_count; ++i) {
+            netdev = netdevs + i;
+            println_info("Updating netdev '%s'...", netdev->name);
+            if (update_netdev(netdev, &interface)) {
+                free(interface.peers);
+                return -1;
+            }
+            dump_netdev(&interface);
+        }
+        sleep(interval);
+    }    
 }
 
 int main(int argc, char const *argv[]) {
@@ -649,12 +728,9 @@ int main(int argc, char const *argv[]) {
         println_error("Failed to read netdev configs");
         goto free_netdevs;
     }
-    for(;;) {
-        if (work(netdevs, netdevs_count)) {
-            println_error("Failed to work");
-            goto free_netdevs;
-        }
-        sleep(10);
+    if (update_netdevs_forever(netdevs, netdevs_count, 10)) {
+        println_error("Failed to update netdevs");
+        goto free_netdevs;
     }
 free_netdevs:
     free(netdevs);
