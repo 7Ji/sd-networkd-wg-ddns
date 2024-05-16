@@ -30,10 +30,10 @@ ${BIN}: ${BIN}.unstripped
 	strip ${BIN}.unstripped -o ${BIN}
 endif
 
-install:
-	install -DTm644 ${BIN}@.service ${DESTDIR}/usr/lib/systemd/system/${BIN}@.service
-	install -DTm644 ${BIN}@.timer ${DESTDIR}/usr/lib/systemd/system/${BIN}@.timer
-	install -DTm755 ${BIN}.py ${DESTDIR}/usr/bin/${BIN}.py
+install: ${BIN}
+	install -DTm644 systemd/${BIN}.service ${DESTDIR}/usr/lib/systemd/system/${BIN}.service
+	install -DTm644 systemd/${BIN}.conf ${DESTDIR}/etc/conf.d/${BIN}
+	install -DTm755 ${BIN} ${DESTDIR}/usr/bin/${BIN}
 
 clean:
 	rm -f ${BIN} ${BIN}.unstripped src/*.c.o

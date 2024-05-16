@@ -1,0 +1,11 @@
+[Unit]
+Description=Update systemd-networkd WireGuard DynDNS endpoints
+ConditionCapability=CAP_NET_ADMIN
+DefaultDependencies=no
+BindsTo=systemd-networkd.service
+After=systemd-networkd.service network-online.target
+Wants=systemd-networkd.service network-online.target
+
+[Service]
+EnvironmentFile=/etc/conf.d/sd-networkd-wg-ddns
+ExecStart=/usr/bin/sd-networkd-wg-ddns $SD_NETWORKD_WG_DDNS_ARGS
