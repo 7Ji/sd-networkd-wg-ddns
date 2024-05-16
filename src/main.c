@@ -23,7 +23,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 /* Library */
-#include "libmnl_minimized.h"
+#include "libmnl.h"
 
 #define print_with_prefix_and_source(prefix, format, arg...) \
     printf("["prefix"] %s:%d: "format, __FUNCTION__, __LINE__, ##arg)
@@ -1065,7 +1065,7 @@ int main(int argc, char const *argv[]) {
         println_error("Failed to read netdev configs");
         goto free_netdevs;
     }
-    if (update_netdevs_forever(netdevs, netdevs_count, 1)) {
+    if (update_netdevs_forever(netdevs, netdevs_count, 10)) {
         println_error("Failed to update netdevs");
         goto free_netdevs;
     }

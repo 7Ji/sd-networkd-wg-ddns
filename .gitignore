@@ -1,1 +1,3 @@
 /sd-networkd-wg-ddns
+/sd-networkd-wg-ddns.unstripped
+*.c.o
