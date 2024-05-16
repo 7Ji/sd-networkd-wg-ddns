@@ -538,6 +538,7 @@ void peers_quick_sort(
 void sort_netdev_peers(
     struct netdev *const restrict netdev
 ) {
+    if (!netdev->peers_count) return;
     peers_quick_sort(netdev->peers, 0, netdev->peers_count - 1);
 }
 
@@ -885,6 +886,11 @@ int update_peer_endpoint(
     peer_nest = mnl_attr_nest_start_check(message_header, SOCKET_BUFFER_SIZE, 0);
     if (!peer_nest) {
         println_error("Message too big for modifying peer");
+        r = -1;
+        goto close_socket;
+    }
+    if (!mnl_attr_put_check(message_header, SOCKET_BUFFER_SIZE, WGPEER_A_PUBLIC_KEY, LEN_WGKEY_RAW, public_key)) {
+        print_error("Message too big for specifying peer");
         r = -1;
         goto close_socket;
     }
