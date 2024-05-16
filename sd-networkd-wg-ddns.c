@@ -30,11 +30,6 @@
 #define print_with_prefix(prefix, format, arg...) \
     printf("["prefix"] "format, ##arg)
 
-// #define println_with_prefix_and_source(prefix, format, arg...) \
-//     print_with_prefix_and_source(prefix, format"\n", ##arg)
-// #define println_with_prefix(prefix, format, arg...) \
-//     print_with_prefix(prefix, format"\n", ##arg)
-
 #define print_info(format, arg...) print_with_prefix("INFO", format, ##arg)
 #define print_warn(format, arg...) print_with_prefix("WARN", format, ##arg)
 #define print_error(format, arg...)  \
@@ -323,7 +318,7 @@ int parse_netdev_buffer(
     size_t size_buffer
 ) {
     struct peer* peers_buffer, *peer;
-    size_t line_start, line_end, stripped_start, stripped_end, len_stripped, key_end, len_key, value_start, len_value, host_end, host_start, len_host, len_port, port_start;
+    size_t line_start, line_end, stripped_start, stripped_end, len_stripped, key_end, len_key, value_start, len_value, host_end, len_port, port_start;
     enum parse_status parse_status;
     char const *key, *value;
     char buffer_port[6];
@@ -508,7 +503,7 @@ unsigned short peers_partition(
     unsigned short const high
 ) {
     unsigned short i, j;
-    char const *pivot;
+    uint8_t const *pivot;
     
     pivot = peers[high].public_key;
     i = low - 1;
@@ -838,7 +833,7 @@ int update_peer_endpoint(
     struct nlattr *peers_nest, *peer_nest;
     char public_key_base64[LEN_WGKEY_BASE64 + 1];
     char ip_address[LEN_IPV6_STRING + 1];
-    int r, last_error;
+    int r;
 
     key_to_base64(public_key_base64, public_key);
     print_info("Updating interface '%s' (ifindex %hu) peer '%s' endpoint to: ", 
@@ -872,7 +867,7 @@ int update_peer_endpoint(
         r = -1;
         goto close_socket;
     }
-    if (netdev_no_peers->ifindex == -1) {
+    if (netdev_no_peers->ifindex == (typeof(netdev_no_peers->ifindex))-1) {
         mnl_attr_put_u32(message_header, WGDEVICE_A_IFINDEX, netdev_no_peers->ifindex);
     } else {
         mnl_attr_put_strz(message_header, WGDEVICE_A_IFNAME, netdev_no_peers->name);
