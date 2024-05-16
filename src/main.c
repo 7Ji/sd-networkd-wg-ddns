@@ -1104,7 +1104,7 @@ int main(int argc, char *argv[]) {
         goto free_netdevs;
     }
     if (!interval) interval = 10;
-    if (update_netdevs_forever(netdevs, netdevs_count, 10)) {
+    if (update_netdevs_forever(netdevs, netdevs_count, interval)) {
         println_error("Failed to update netdevs");
         goto free_netdevs;
     }
