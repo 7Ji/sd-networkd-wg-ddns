@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 import pathlib
 from enum import Enum
 from typing import Self

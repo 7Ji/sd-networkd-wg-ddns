@@ -1,3 +1,6 @@
+---
+SPDX-License-Identifier: AGPL-3.0-or-later
+---
 # Systemd-networkd wireguard netdev endpoints DynDNS updater
 
 To run:

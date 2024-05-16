@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /* C */
 #include <errno.h>
 #include <limits.h>

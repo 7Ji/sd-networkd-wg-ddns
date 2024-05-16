@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 BIN := sd-networkd-wg-ddns
 CC ?= gcc
 CFLAGS ?= -Wall -Wextra -std=gnu11 -O3 -flto
