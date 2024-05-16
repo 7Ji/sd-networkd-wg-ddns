@@ -25,17 +25,32 @@
 /* Library */
 #include "libmnl_minimized.h"
 
-#define println_with_prefix_and_source(prefix, format, arg...) \
-    printf("["prefix"] %s:%d: "format"\n", __FUNCTION__, __LINE__, ##arg)
-#define println_with_prefix(prefix, format, arg...) \
-    printf("["prefix"] "format"\n", ##arg)
-#define println_info(format, arg...) println_with_prefix("INFO", format, ##arg)
-#define println_warn(format, arg...) println_with_prefix("WARN", format, ##arg)
-#define println_error(format, arg...)  \
-    println_with_prefix_and_source("ERROR", format, ##arg)
-#define println_error_with_errno(format, arg...) \
-    println_error(format", errno: %d, error: %s\n", ##arg, errno, strerror(errno))
+#define print_with_prefix_and_source(prefix, format, arg...) \
+    printf("["prefix"] %s:%d: "format, __FUNCTION__, __LINE__, ##arg)
+#define print_with_prefix(prefix, format, arg...) \
+    printf("["prefix"] "format, ##arg)
 
+// #define println_with_prefix_and_source(prefix, format, arg...) \
+//     print_with_prefix_and_source(prefix, format"\n", ##arg)
+// #define println_with_prefix(prefix, format, arg...) \
+//     print_with_prefix(prefix, format"\n", ##arg)
+
+#define print_info(format, arg...) print_with_prefix("INFO", format, ##arg)
+#define print_warn(format, arg...) print_with_prefix("WARN", format, ##arg)
+#define print_error(format, arg...)  \
+    print_with_prefix_and_source("ERROR", format, ##arg)
+#define print_error_with_errno(format, arg...) \
+    print_error(format", errno: %d, error: %s", ##arg, errno, strerror(errno))
+
+#define println_info(format, arg...) print_info(format"\n", ##arg)
+#define println_warn(format, arg...) print_warn(format"\n", ##arg)
+#define println_error(format, arg...)  print_error(format"\n", ##arg)
+#define println_error_with_errno(format, arg...) \
+    print_error(format", errno: %d, error: %s\n", ##arg, errno, strerror(errno))
+
+#define println(format, arg...) printf(format"\n", ##arg)
+
+#define dump_netdev(netdev)
 #define min2(A, B) (A > B ? B : A)
 
 #define ALLOC_BASE 0x10
@@ -57,11 +72,14 @@
 #define LEN_DOMAIN 255
 #define LEN_WGKEY_RAW 32
 #define LEN_WGKEY_BASE64 ((((LEN_WGKEY_RAW) + 2) / 3) * 4)
+#define LEN_IPV4_STRING 15 // 3 * 4 + 3
+#define LEN_IPV6_STRING 39 // 4 * 8 + 7
+#define SOCKET_BUFFER_SIZE (mnl_ideal_socket_buffer_size())
 
 enum host_type {
-    host_type_domain,
-    host_type_ipv4,
-    host_type_ipv6
+    HOST_TYPE_DOMAIN,
+    HOST_TYPE_IPV4,
+    HOST_TYPE_IPV6
 };
 
 char *host_type_strings[] = {
@@ -69,6 +87,13 @@ char *host_type_strings[] = {
     "IPv4",
     "IPv6"
 };
+
+#define SOCKADDR_IN46_DECLARE { \
+    struct sockaddr_in6 sockaddr_in6; \
+    struct sockaddr_in sockaddr_in; \
+}
+
+union sockaddr_in46 SOCKADDR_IN46_DECLARE;
 
 struct endpoint_domain {
     char name[LEN_DOMAIN + 1]; // len = 255 (max length of domain name)
@@ -79,22 +104,29 @@ struct endpoint_domain {
 struct peer {
     uint8_t public_key[LEN_WGKEY_RAW]; // len = 44
     union {
-        struct {
-            char domain[LEN_DOMAIN + 1];
-            unsigned short len_domain;
+        struct endpoint_domain domain;
+        union {
+            union sockaddr_in46 sockaddr_in46;
+            union SOCKADDR_IN46_DECLARE;
         };
-        struct in6_addr ipv6;
-        struct in_addr ipv4;
-    } endpoint_host;
-    in_port_t endpoint_port;
+    } endpoint;
     enum host_type endpoint_type;
     struct timespec last_handshake;
 };
 
+#define NETDEV_NO_PEERS_DECLARE { \
+    char name[IFNAMSIZ]; \
+    unsigned short len_name; \
+    uint32_t ifindex; \
+}
+
+struct netdev_no_peers NETDEV_NO_PEERS_DECLARE;
+
 struct netdev {
-    char name[IFNAMSIZ]; // len = 15
-    unsigned short len_name;
-    uint32_t ifindex;
+    union {
+        struct netdev_no_peers netdev_no_peers;
+        struct NETDEV_NO_PEERS_DECLARE;
+    };
     struct peer *peers;
     unsigned short peers_count;
     unsigned short peers_allocated;
@@ -107,6 +139,54 @@ enum parse_status {
     parse_status_other_section
 };
 
+static inline
+bool in_addr_equal(
+    struct in_addr const *const restrict some,
+    struct in_addr const *const restrict other
+) {
+    return some->s_addr == other->s_addr;
+}
+
+static inline
+bool sockaddr_in_equal(
+    struct sockaddr_in const *const restrict some,
+    struct sockaddr_in const *const restrict other
+) {
+    return 
+        some->sin_port == other->sin_port &&
+        some->sin_addr.s_addr == other->sin_addr.s_addr;
+}
+
+static inline
+bool in6_addr_equal (
+    struct in6_addr const *const restrict some,
+    struct in6_addr const *const restrict other
+) {
+    return some->s6_addr == other->s6_addr;
+}
+
+static inline
+bool sockaddr_in6_equal (
+    struct sockaddr_in6 const *const restrict some,
+    struct sockaddr_in6 const *const restrict other
+) {
+    return 
+        some->sin6_port == other->sin6_port &&
+        some->sin6_flowinfo == other->sin6_flowinfo &&
+        some->sin6_addr.s6_addr == other->sin6_addr.s6_addr &&
+        some->sin6_scope_id == other->sin6_scope_id;
+}
+
+static inline
+bool sockaddr_in46_equal (
+    union sockaddr_in46 const *const restrict some,
+    union sockaddr_in46 const *const restrict other,
+    enum host_type const type
+){
+    return type == HOST_TYPE_IPV6 ? 
+        sockaddr_in6_equal(&some->sockaddr_in6, &other->sockaddr_in6) :
+        sockaddr_in_equal(&some->sockaddr_in, &other->sockaddr_in);
+}
 
 int init_netdev_peers(struct netdev *const restrict netdev, unsigned short peers_allocated) {
     if (!peers_allocated) peers_allocated = ALLOC_BASE;
@@ -122,10 +202,10 @@ int init_netdev_peers(struct netdev *const restrict netdev, unsigned short peers
 
 void init_peer(struct peer *const restrict peer) {
     peer->public_key[0] = '\0';
-    peer->endpoint_host.domain[0] = '\0';
-    peer->endpoint_host.len_domain = 0;
-    peer->endpoint_port = 0;
-    peer->endpoint_type = host_type_domain;
+    peer->endpoint.domain.name[0] = '\0';
+    peer->endpoint.domain.len_name = 0;
+    peer->endpoint.domain.port = 0;
+    peer->endpoint_type = HOST_TYPE_DOMAIN;
     peer->last_handshake.tv_nsec = 0;
     peer->last_handshake.tv_sec = 0;
 }
@@ -194,10 +274,11 @@ bool key_from_base64(uint8_t key[static LEN_WGKEY_RAW], const char *base64)
 	return 1 & ((ret - 1) >> 8);
 }
 
-void peer_endpoint_fill_host(
+void peer_endpoint_complete(
     struct peer *const restrict peer,
     char const *const restrict host,
-    unsigned short len_host
+    unsigned short len_host,
+    in_port_t const port
 ) {
     bool could_v4;
     char buffer[LEN_DOMAIN + 1];
@@ -210,22 +291,30 @@ void peer_endpoint_fill_host(
     }
     memcpy(buffer, host + 1, len_host - 2);
     buffer[len_host - 2] = '\0';
-    if (inet_pton(AF_INET6, buffer, &peer->endpoint_host.ipv6) == 1) { // Is v6
-        peer->endpoint_type = host_type_ipv6;
+    if (inet_pton(AF_INET6, buffer, &peer->endpoint.sockaddr_in6.sin6_addr) == 1) { // Is v6
+        peer->endpoint_type = HOST_TYPE_IPV6;
+        peer->endpoint.sockaddr_in6.sin6_family = AF_INET6;
+        peer->endpoint.sockaddr_in6.sin6_port = port;
+        peer->endpoint.sockaddr_in6.sin6_flowinfo = 0;
+        peer->endpoint.sockaddr_in6.sin6_scope_id = 0;
         return;
     }
     if (could_v4) {
         memcpy(buffer, host, len_host);
         buffer[len_host] = '\0';
-        if (inet_pton(AF_INET, buffer, &peer->endpoint_host.ipv4) == 1) {
-            peer->endpoint_type = host_type_ipv4;
+        if (inet_pton(AF_INET, buffer, &peer->endpoint.sockaddr_in.sin_addr) == 1) {
+            peer->endpoint_type = HOST_TYPE_IPV4;
+            peer->endpoint.sockaddr_in.sin_family = AF_INET;
+            peer->endpoint.sockaddr_in.sin_port = port;
+            memset(peer->endpoint.sockaddr_in.sin_zero, 0, sizeof peer->endpoint.sockaddr_in.sin_zero);
             return;
         }
     }
-    memcpy(peer->endpoint_host.domain, host, len_host);
-    peer->endpoint_host.domain[len_host] = '\0';
-    peer->endpoint_host.len_domain = len_host;
-    peer->endpoint_type = host_type_domain;
+    peer->endpoint_type = HOST_TYPE_DOMAIN;
+    memcpy(peer->endpoint.domain.name, host, len_host);
+    peer->endpoint.domain.name[len_host] = '\0';
+    peer->endpoint.domain.len_name = len_host;
+    peer->endpoint.domain.port = port;
 }
 
 int parse_netdev_buffer(
@@ -364,9 +453,8 @@ int parse_netdev_buffer(
                     len_port = min2(len_port, (sizeof buffer_port) - 1);
                     memcpy(buffer_port, buffer + port_start, len_port);
                     buffer_port[len_port] = '\0';
-                    peer->endpoint_port = strtoul(buffer_port, NULL, 10);
-                    // Host
-                    peer_endpoint_fill_host(peer, value, host_end - value_start);
+                    // Complete
+                    peer_endpoint_complete(peer, value, host_end - value_start, strtoul(buffer_port, NULL, 10));
                 }
                 break;
             }
@@ -453,6 +541,7 @@ void sort_netdev_peers(
     peers_quick_sort(netdev->peers, 0, netdev->peers_count - 1);
 }
 
+#ifndef dump_netdev
 void dump_netdev(
     struct netdev const *const restrict netdev
 ) {
@@ -469,6 +558,7 @@ void dump_netdev(
         // println_info("  -> Port: %hu", peer->endpoint_port);
     }
 }
+#endif
 
 int parse_netdev_config(
     struct netdev *const restrict netdev, 
@@ -607,13 +697,11 @@ static int parse_peer(
 			break;
 		addr = mnl_attr_get_payload(attr);
 		if (addr->sa_family == AF_INET && mnl_attr_get_payload_len(attr) == sizeof(struct sockaddr_in)) {
-            peer->endpoint_type = host_type_ipv4;
-            peer->endpoint_host.ipv4 = ((struct sockaddr_in *)addr)->sin_addr;
-            peer->endpoint_port = ((struct sockaddr_in *)addr)->sin_port;
+            peer->endpoint_type = HOST_TYPE_IPV4;
+            peer->endpoint.sockaddr_in = *(struct sockaddr_in *)addr;
         } else if (addr->sa_family == AF_INET6 && mnl_attr_get_payload_len(attr) == sizeof(struct sockaddr_in6)) {
-            peer->endpoint_type = host_type_ipv6;
-            peer->endpoint_host.ipv6 = ((struct sockaddr_in6 *)addr)->sin6_addr;
-            peer->endpoint_port = ((struct sockaddr_in6 *)addr)->sin6_port;
+            peer->endpoint_type = HOST_TYPE_IPV6;
+            peer->endpoint.sockaddr_in6 = *(struct sockaddr_in6 *)addr;
         } else {
             println_warn("Endpoint is neither v4 nor v6");
         }
@@ -727,6 +815,117 @@ int get_interface_peers(
     return r;
 }
 
+// int update_ipv4(
+//     // struct 
+
+// ) {
+
+// }
+
+// int update_ipv6(
+
+// )
+
+int update_peer_endpoint(
+    struct netdev_no_peers const *const restrict netdev_no_peers,
+    uint8_t const public_key[LEN_WGKEY_RAW],
+    union sockaddr_in46 const *const restrict address,
+    enum host_type const type
+) {
+    struct mnlg_socket *generic_socket;
+	struct nlmsghdr *message_header;
+    struct nlattr *peers_nest, *peer_nest;
+    char public_key_base64[LEN_WGKEY_BASE64 + 1];
+    char ip_address[LEN_IPV6_STRING + 1];
+    int r, last_error;
+
+    key_to_base64(public_key_base64, public_key);
+    print_info("Updating interface '%s' (ifindex %hu) peer '%s' endpoint to: ", 
+        netdev_no_peers->name, netdev_no_peers->ifindex, public_key_base64);
+    switch (type) {
+    case HOST_TYPE_IPV6:
+        inet_ntop(AF_INET6, &address->sockaddr_in6.sin6_addr, ip_address, LEN_IPV6_STRING + 1);
+        ip_address[LEN_IPV6_STRING] = '\0';
+        println("[%s]:%hu", ip_address, address->sockaddr_in6.sin6_port);
+        break;
+    case HOST_TYPE_IPV4:
+        inet_ntop(AF_INET, &address->sockaddr_in.sin_addr, ip_address, LEN_IPV4_STRING + 1);
+        ip_address[LEN_IPV4_STRING] = '\0';
+        println("%s:%hu", ip_address, address->sockaddr_in.sin_port);
+        break;
+    default:
+        println_error("\nIllegal host type %d (%s)", type, host_type_strings[type]);
+        r = -1;
+        goto close_socket;
+    }
+    
+
+    generic_socket = mnlg_socket_open(WG_GENL_NAME, WG_GENL_VERSION);
+    if (!generic_socket) {
+        println_error_with_errno("Failed to open generic socket '%s'", WG_GENL_NAME);
+        return -1;
+    }
+    message_header = mnlg_msg_prepare(generic_socket, WG_CMD_SET_DEVICE, NLM_F_REQUEST | NLM_F_ACK);
+    if (!message_header) {
+        println_error("Failed to prepare message header");
+        r = -1;
+        goto close_socket;
+    }
+    if (netdev_no_peers->ifindex == -1) {
+        mnl_attr_put_u32(message_header, WGDEVICE_A_IFINDEX, netdev_no_peers->ifindex);
+    } else {
+        mnl_attr_put_strz(message_header, WGDEVICE_A_IFNAME, netdev_no_peers->name);
+    }
+    peers_nest = mnl_attr_nest_start(message_header, WGDEVICE_A_PEERS);
+    if (!peers_nest) {
+        println_error("Message too big for modifying peers");
+        r = -1;
+        goto close_socket;
+    }
+    peer_nest = mnl_attr_nest_start_check(message_header, SOCKET_BUFFER_SIZE, 0);
+    if (!peer_nest) {
+        println_error("Message too big for modifying peer");
+        r = -1;
+        goto close_socket;
+    }
+    switch (type) {
+    case HOST_TYPE_IPV6: 
+        if (!mnl_attr_put_check(message_header, SOCKET_BUFFER_SIZE, WGPEER_A_ENDPOINT, sizeof address->sockaddr_in6, &address->sockaddr_in6)) {
+            println_error("Failed to append message to update endpoint to IPv6");
+            r = -1;
+            goto close_socket;
+        }
+        break;
+    case HOST_TYPE_IPV4:
+        if (!mnl_attr_put_check(message_header, SOCKET_BUFFER_SIZE, WGPEER_A_ENDPOINT, sizeof address->sockaddr_in, &address->sockaddr_in)) {
+            println_error("Failed to append message to update endpoint to IPv4");
+            r = -1;
+            goto close_socket;
+        }
+        break;
+    default:
+        println_error("Illegal host type %d (%s)", type, host_type_strings[type]);
+        r = -1;
+        goto close_socket;
+    }
+    mnl_attr_nest_end(message_header, peer_nest);
+	mnl_attr_nest_end(message_header, peers_nest);
+	if (mnlg_socket_send(generic_socket, message_header) < 0) {
+        println_error_with_errno("Failed to send message over socket");
+        r = -1;
+        goto close_socket;
+	}
+	errno = 0;
+	if (mnlg_socket_recv_run(generic_socket, NULL, NULL) < 0) {
+        println_error_with_errno("Failed to receive message from socket");
+        r = -1;
+        goto close_socket;
+	}
+    r = 0;
+close_socket:
+    mnlg_socket_close(generic_socket);
+    return r;
+}
 
 int update_netdev(
     struct netdev const *const restrict netdev,
@@ -735,7 +934,8 @@ int update_netdev(
     unsigned short i;
     struct peer const *restrict peer_netdev, *restrict peer_interface;
     struct addrinfo *addrinfos, *addrinfo;
-    bool need_update;
+    enum host_type looked_up_type;
+    union sockaddr_in46 looked_up_address;
 
     if (!netdev->peers_count) return 0;
     // Init buffer interface
@@ -752,34 +952,57 @@ int update_netdev(
     }
     for (i = 0; i < netdev->peers_count; ++i) {
         peer_netdev = netdev->peers + i;
-        if (peer_netdev->endpoint_type != host_type_domain) continue;
+        // No need to update non-domain endpoints
+        if (peer_netdev->endpoint_type != HOST_TYPE_DOMAIN) continue;
         peer_interface = interface->peers + i;
         if (memcmp(peer_netdev->public_key, peer_interface->public_key, LEN_WGKEY_RAW)) {
             println_error("Peer different on interface");
             return -1;
         }
-        if (getaddrinfo(peer_netdev->endpoint_host.domain, NULL, NULL, &addrinfos)) {
-            println_warn("Failed to resolve DNS for '%s'", peer_netdev->endpoint_host.domain);
+        looked_up_type = peer_netdev->endpoint_type;
+        switch (peer_netdev->endpoint_type) {
+        case HOST_TYPE_DOMAIN:
+            if (getaddrinfo(peer_netdev->endpoint.domain.name, NULL, NULL, &addrinfos)) {
+                println_warn("Failed to resolve DNS for '%s'", peer_netdev->endpoint.domain.name);
+                continue;
+            }
+            for (addrinfo = addrinfos; looked_up_type == HOST_TYPE_DOMAIN && addrinfo; addrinfo = addrinfo->ai_next) {
+                switch (addrinfo->ai_family) {
+                case AF_INET:
+                    looked_up_type = HOST_TYPE_IPV4;
+                    looked_up_address.sockaddr_in = *(struct sockaddr_in *)addrinfo->ai_addr;
+                    looked_up_address.sockaddr_in.sin_port = peer_netdev->endpoint.domain.port;
+                    break;
+                case AF_INET6:
+                    looked_up_type = HOST_TYPE_IPV6;
+                    looked_up_address.sockaddr_in6 = *(struct sockaddr_in6 *)addrinfo->ai_addr;
+                    looked_up_address.sockaddr_in6.sin6_port = peer_netdev->endpoint.domain.port;
+                    break;
+                default:
+                    break;
+                }
+            }
+            freeaddrinfo(addrinfos);
+            if (looked_up_type == HOST_TYPE_DOMAIN) {
+                println_warn("Failed to lookup domain '%s'", peer_netdev->endpoint.domain.name);
+                continue;
+            }
+            break;
+        case HOST_TYPE_IPV4:
+            looked_up_address.sockaddr_in = peer_netdev->endpoint.sockaddr_in;
+            break;
+        case HOST_TYPE_IPV6:
+            looked_up_address.sockaddr_in6 = peer_netdev->endpoint.sockaddr_in6;
+            break;
+        }
+        if (peer_interface->endpoint_type == looked_up_type &&
+            sockaddr_in46_equal(&peer_interface->endpoint.sockaddr_in46, &looked_up_address, looked_up_type)
+        ) {
             continue;
         }
-        for (addrinfo = addrinfos; addrinfo; addrinfo = addrinfo->ai_next) {
-            switch (addrinfo->ai_family) {
-            case AF_INET:
-                // addrinfo->
-                break;
-            case AF_INET6:
-                break;
-            default:
-                break;
-            }
-        }
-        switch (peer_interface->endpoint_type) {
-        case host_type_ipv4:
-            break;
-        case host_type_ipv6:
-            break;
-        default:
-            break;
+        if (update_peer_endpoint(&interface->netdev_no_peers, peer_interface->public_key, &looked_up_address, looked_up_type)) {
+            println_warn("Failed to update, wait till next loop...");
+            continue;
         }
     }
 	return 0;
@@ -806,11 +1029,13 @@ int update_netdevs_forever(
     if (init_netdev_peers(&interface, max_peers)) {
         return -1;
     }
+    println_info("Updating forever with %hu seconds interval for %hu netdev(s)", 
+        interval, netdevs_count);
     for(;;) {
         max_peers = 0;
         for (i = 0; i < netdevs_count; ++i) {
             netdev = netdevs + i;
-            println_info("Updating netdev '%s'...", netdev->name);
+            // println_info("Updating netdev '%s'...", netdev->name);
             if (update_netdev(netdev, &interface)) {
                 free(interface.peers);
                 return -1;
@@ -839,7 +1064,7 @@ int main(int argc, char const *argv[]) {
         println_error("Failed to read netdev configs");
         goto free_netdevs;
     }
-    if (update_netdevs_forever(netdevs, netdevs_count, 10)) {
+    if (update_netdevs_forever(netdevs, netdevs_count, 1)) {
         println_error("Failed to update netdevs");
         goto free_netdevs;
     }
