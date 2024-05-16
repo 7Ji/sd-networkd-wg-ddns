@@ -6,16 +6,25 @@ ifeq (${DEBUGGING},1)
 	CFLAGS += -g
 endif
 
+ifndef VERSION
+	VERSION:=$(shell bash scripts/version.sh)
+endif
+
 all: ${BIN}
 
 src/%.c.o: src/%.c
 	${CC} ${CFLAGS} -o $@ -c $^
 
+ifdef VERSION
+src/version.c.o: src/version.c
+	${CC} ${CFLAGS} -o $@ -c $^ -DVERSION=\"$(VERSION)\"
+endif
+
 ifeq (${DEBUGGING},1)
-${BIN}: src/main.c.o src/libmnl.c.o
+${BIN}: src/main.c.o src/libmnl.c.o src/version.c.o
 	${CC} ${CFLAGS} -o $@  $^
 else
-${BIN}.unstripped: src/main.c.o src/libmnl.c.o
+${BIN}.unstripped: src/main.c.o src/libmnl.c.o src/version.c.o
 	${CC} ${CFLAGS} -o $@  $^
 ${BIN}: ${BIN}.unstripped
 	strip ${BIN}.unstripped -o ${BIN}

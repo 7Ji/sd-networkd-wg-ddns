@@ -1,5 +1,4 @@
 /* C */
-#include <asm-generic/errno-base.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdint.h>
@@ -11,6 +10,7 @@
 /* POSIX */
 #include <dirent.h>
 #include <fcntl.h>
+#include <getopt.h>
 #include <unistd.h>
 /* Linux */
 #include <linux/if.h>
@@ -24,6 +24,8 @@
 #include <arpa/inet.h>
 /* Library */
 #include "libmnl.h"
+/* Local */
+#include "version.h"
 
 #define print_with_prefix_and_source(prefix, format, arg...) \
     printf("["prefix"] %s:%d: "format, __FUNCTION__, __LINE__, ##arg)
@@ -611,7 +613,7 @@ free_buffer:
 int read_netdev_configs(
     struct netdev *const restrict netdevs,
     unsigned short const netdevs_count,
-    char const *const restrict netdev_stems[]
+    char *netdev_stems[]
 ) {
     char netdev_name[NAME_MAX + 1];
     char const *netdev_stem;
@@ -1046,24 +1048,62 @@ int update_netdevs_forever(
     }    
 }
 
-int main(int argc, char const *argv[]) {
-    struct netdev *netdevs;
-    unsigned short netdevs_count;
+void show_help(char const *const restrict arg0) {
+    printf("%s", arg0);
+    puts(" (--interval/-i [interval]) [netdev name] ([netdev name] ([netdev name] ...))\n\n"
+        "\t--interval/-i [interval]\tset the interval between each check\n"
+        "\t[netdev name]\t\t\tnetdev names under '"PATH_CONFIGS"', without .netdev suffix\n"
+    );
+}
 
-    if (argc < 2) {
+void show_version() {
+    printf("sd-networkd-wg-ddns version %s by Guoxin \"7Ji\" Pu, licensed under GNU Affero General Public License v3 or later\n", version);
+}
+
+int main(int argc, char *argv[]) {
+    struct netdev *netdevs;
+    unsigned short interval = 10;
+    int c, option_index = 0, netdevs_count;
+    // char const *const arg0 = argv[0];l
+    struct option const long_options[] = {
+        {"interval",    required_argument,  NULL,   'i'},
+        {"help",        no_argument,        NULL,   'h'},
+        {"version",     no_argument,        NULL,   'v'},
+        {NULL,          no_argument,        NULL,     0},
+    };
+
+    while ((c = getopt_long(argc, argv, "i:hv", long_options, &option_index)) != -1) {
+        switch (c) {
+        case 'i':
+            interval = strtoul(optarg, NULL, 10);
+            break;
+        case 'v':   // version
+            show_version();
+            return 0;
+        case 'h':   // help
+            show_help(argv[0]);
+            return 0;
+        default:
+            println_error("Unknown option '%s'", argv[optind - 1]);
+            return -1;
+        }
+    }
+
+    netdevs_count = argc - optind;
+    if (netdevs_count < 1) {
         println_error("Too few arguments, please pass .netdev names (without suffix) as arguments");
         return -1;
     }
-    netdevs_count = argc - 1;
     netdevs = malloc(sizeof *netdevs * netdevs_count);
     if (!netdevs) {
         println_error_with_errno("Failed to allocate memory on heap for %hu netdevs", netdevs_count);
         return -1;
     }
-    if (read_netdev_configs(netdevs, netdevs_count, argv + 1)) {
+    if (read_netdev_configs(netdevs, netdevs_count, argv + optind)) {
         println_error("Failed to read netdev configs");
         goto free_netdevs;
     }
+    if (!interval) interval = 10;
     if (update_netdevs_forever(netdevs, netdevs_count, 10)) {
         println_error("Failed to update netdevs");
         goto free_netdevs;
