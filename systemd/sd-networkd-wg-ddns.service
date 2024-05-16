@@ -9,3 +9,6 @@ Wants=systemd-networkd.service network-online.target
 [Service]
 EnvironmentFile=/etc/conf.d/sd-networkd-wg-ddns
 ExecStart=/usr/bin/sd-networkd-wg-ddns $SD_NETWORKD_WG_DDNS_ARGS
+
+[Install]
+WantedBy=multi-user.target
