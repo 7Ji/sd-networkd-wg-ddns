@@ -149,7 +149,7 @@ bool sockaddr_in_equal(
 ) {
     return 
         some->sin_port == other->sin_port &&
-        some->sin_addr.s_addr == other->sin_addr.s_addr;
+        in_addr_equal(&some->sin_addr, &other->sin_addr);
 }
 
 static inline
@@ -168,7 +168,7 @@ bool sockaddr_in6_equal (
     return 
         some->sin6_port == other->sin6_port &&
         some->sin6_flowinfo == other->sin6_flowinfo &&
-        some->sin6_addr.s6_addr == other->sin6_addr.s6_addr &&
+        in6_addr_equal(&some->sin6_addr, &other->sin6_addr) &&
         some->sin6_scope_id == other->sin6_scope_id;
 }
 
@@ -773,7 +773,7 @@ int get_interface_peers(
     int r, last_error;
 
     last_error = EINTR;
-    while (last_error == EINTR) {
+    do {
         interface->peers_count = 0;
         interface->ifindex = -1;
         generic_socket = mnlg_socket_open(WG_GENL_NAME, WG_GENL_VERSION);
@@ -807,7 +807,7 @@ int get_interface_peers(
         close_socket:
             mnlg_socket_close(generic_socket);
         break;
-    }
+    } while (last_error == EINTR);
     return r;
 }
 
@@ -851,8 +851,7 @@ int update_peer_endpoint(
         break;
     default:
         println_error("\nIllegal host type %d (%s)", type, host_type_strings[type]);
-        r = -1;
-        goto close_socket;
+        return -1;
     }
     
 

@@ -1,4 +1,5 @@
 BIN := sd-networkd-wg-ddns
+CC ?= gcc
 CFLAGS ?= -Wall -Wextra -std=gnu11 -O3 -flto
 
 ifeq (${DEBUGGING},1)
