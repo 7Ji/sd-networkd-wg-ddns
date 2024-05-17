@@ -96,7 +96,7 @@ union sockaddr_in46 SOCKADDR_IN46_DECLARE;
 struct endpoint_domain {
     char name[LEN_DOMAIN + 1]; // len = 255 (max length of domain name)
     unsigned short len_name;
-    in_port_t port;
+    in_port_t port; // Network byte order
 };
 
 struct peer {
@@ -276,11 +276,12 @@ void peer_endpoint_complete(
     struct peer *const restrict peer,
     char const *const restrict host,
     unsigned short len_host,
-    in_port_t const port
+    in_port_t port
 ) {
     bool could_v4;
     char buffer[LEN_DOMAIN + 1];
 
+    port = htons(port); // Convert to network byte order
     len_host = min2(len_host, (sizeof buffer) - 1);
     if (host[0] == '[' && host[len_host] == ']') { // Definitely not v4
         could_v4 = false;
