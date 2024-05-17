@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
-MAJOR=0
-MINOR=1
+MAJOR=1
+MINOR=0
 FIX=0
 # Use test for posix shell compatability
 if [ -e ".git" ]; then
