@@ -150,7 +150,7 @@ void ipv4_string_from_in(
     char ipv4_string[LEN_IPV4_STRING + 1],
     struct in_addr const *const restrict in_addr
 ) {
-    if (!inet_ntop(AF_INET6, in_addr, ipv4_string, LEN_IPV4_STRING + 1)) {
+    if (!inet_ntop(AF_INET, in_addr, ipv4_string, LEN_IPV4_STRING + 1)) {
         println_error_with_errno("Failed to format IPv4 string");
         memcpy(ipv4_string, "xxx.xxx.xxx.xxx", LEN_IPV4_STRING + 1);
     }
