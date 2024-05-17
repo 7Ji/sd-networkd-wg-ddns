@@ -48,7 +48,6 @@
 
 #define println(format, arg...) printf(format"\n", ##arg)
 
-#define dump_netdev(netdev)
 #define min2(A, B) (A > B ? B : A)
 
 #define ALLOC_BASE 0x10
@@ -587,15 +586,35 @@ void dump_netdev(
 ) {
     unsigned short i;
     struct peer const *peer;
+    char public_key_base64[LEN_WGKEY_BASE64 + 1];
+    char ip_address[LEN_IPV6_STRING + 1];
+    in_port_t port;
 
     println_info("Netdev '%s':", netdev->name);
     for (i = 0; i < netdev->peers_count; ++i) {
         println_info(" => Peer %hu:", i);
         peer = netdev->peers + i;
-        // println_info("  -> Public Key: %s", peer->public_key);
-        // println_info("  -> Host: %s", peer->endpoint_host);
-        println_info("  -> Host type: %s", host_type_strings[peer->endpoint_type]);
-        // println_info("  -> Port: %hu", peer->endpoint_port);
+        key_to_base64(public_key_base64, peer->public_key);
+        println_info("  -> Public Key: %s", public_key_base64);
+        println_info("  -> Endpoint type: %s", host_type_strings[peer->endpoint_type]);
+        switch (peer->endpoint_type) {
+        case HOST_TYPE_DOMAIN:
+            println_info("  -> Endpoint host: %s", peer->endpoint.domain.name);
+            port = peer->endpoint.domain.port;
+            break;
+        case HOST_TYPE_IPV4:
+            ipv4_string_from_in(ip_address, &peer->endpoint.sockaddr_in.sin_addr);
+            port = peer->endpoint.sockaddr_in.sin_port;
+            break;
+        case HOST_TYPE_IPV6:
+            ipv6_string_from_in6(ip_address, &peer->endpoint.sockaddr_in6.sin6_addr);
+            port = peer->endpoint.sockaddr_in6.sin6_port;
+            break;
+        default:
+            port = 0; // To make GCC happy
+            break;
+        }
+        println_info("  -> Endpoint port: %hu", ntohs(port));
     }
 }
 #endif
@@ -1082,7 +1101,6 @@ int update_netdevs_forever(
                 free(interface.peers);
                 return -1;
             }
-            dump_netdev(&interface);
         }
         sleep(interval);
     }    
