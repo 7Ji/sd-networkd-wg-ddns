@@ -179,7 +179,11 @@ bool in6_addr_equal (
     struct in6_addr const *const restrict some,
     struct in6_addr const *const restrict other
 ) {
-    return *some->s6_addr == *other->s6_addr;
+    return 
+        some->s6_addr32[0] == other->s6_addr32[0] &&
+        some->s6_addr32[1] == other->s6_addr32[1] &&
+        some->s6_addr32[2] == other->s6_addr32[2] &&
+        some->s6_addr32[3] == other->s6_addr32[3];
 }
 
 static inline 
