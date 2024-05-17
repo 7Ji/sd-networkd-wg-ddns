@@ -250,65 +250,65 @@ void init_peer(struct peer *const restrict peer) {
 /* encode_base64, key_to_base64, decode_base64, key_from_base64 are borrowed from wireguard-tools/src/encoding.c */
 static inline void encode_base64(char dest[static 4], const uint8_t src[static 3])
 {
-	uint8_t const input[] = { (src[0] >> 2) & 63, ((src[0] << 4) | (src[1] >> 4)) & 63, ((src[1] << 2) | (src[2] >> 6)) & 63, src[2] & 63 };
+    uint8_t const input[] = { (src[0] >> 2) & 63, ((src[0] << 4) | (src[1] >> 4)) & 63, ((src[1] << 2) | (src[2] >> 6)) & 63, src[2] & 63 };
 
-	for (unsigned int i = 0; i < 4; ++i)
-		dest[i] = input[i] + 'A'
-			  + (((25 - input[i]) >> 8) & 6)
-			  - (((51 - input[i]) >> 8) & 75)
-			  - (((61 - input[i]) >> 8) & 15)
-			  + (((62 - input[i]) >> 8) & 3);
+    for (unsigned int i = 0; i < 4; ++i)
+        dest[i] = input[i] + 'A'
+              + (((25 - input[i]) >> 8) & 6)
+              - (((51 - input[i]) >> 8) & 75)
+              - (((61 - input[i]) >> 8) & 15)
+              + (((62 - input[i]) >> 8) & 3);
 
 }
 
 void key_to_base64(char base64[static LEN_WGKEY_BASE64 + 1], const uint8_t key[static LEN_WGKEY_RAW])
 {
-	unsigned int i;
+    unsigned int i;
 
-	for (i = 0; i < WG_KEY_LEN / 3; ++i)
-		encode_base64(&base64[i * 4], &key[i * 3]);
-	encode_base64(&base64[i * 4], (const uint8_t[]){ key[i * 3 + 0], key[i * 3 + 1], 0 });
-	base64[LEN_WGKEY_BASE64 - 1] = '=';
-	base64[LEN_WGKEY_BASE64] = '\0';
+    for (i = 0; i < WG_KEY_LEN / 3; ++i)
+        encode_base64(&base64[i * 4], &key[i * 3]);
+    encode_base64(&base64[i * 4], (const uint8_t[]){ key[i * 3 + 0], key[i * 3 + 1], 0 });
+    base64[LEN_WGKEY_BASE64 - 1] = '=';
+    base64[LEN_WGKEY_BASE64] = '\0';
 }
 
 static inline int decode_base64(const char src[static 4])
 {
-	int val = 0;
+    int val = 0;
 
-	for (unsigned int i = 0; i < 4; ++i)
-		val |= (-1
-			    + ((((('A' - 1) - src[i]) & (src[i] - ('Z' + 1))) >> 8) & (src[i] - 64))
-			    + ((((('a' - 1) - src[i]) & (src[i] - ('z' + 1))) >> 8) & (src[i] - 70))
-			    + ((((('0' - 1) - src[i]) & (src[i] - ('9' + 1))) >> 8) & (src[i] + 5))
-			    + ((((('+' - 1) - src[i]) & (src[i] - ('+' + 1))) >> 8) & 63)
-			    + ((((('/' - 1) - src[i]) & (src[i] - ('/' + 1))) >> 8) & 64)
-			) << (18 - 6 * i);
-	return val;
+    for (unsigned int i = 0; i < 4; ++i)
+        val |= (-1
+                + ((((('A' - 1) - src[i]) & (src[i] - ('Z' + 1))) >> 8) & (src[i] - 64))
+                + ((((('a' - 1) - src[i]) & (src[i] - ('z' + 1))) >> 8) & (src[i] - 70))
+                + ((((('0' - 1) - src[i]) & (src[i] - ('9' + 1))) >> 8) & (src[i] + 5))
+                + ((((('+' - 1) - src[i]) & (src[i] - ('+' + 1))) >> 8) & 63)
+                + ((((('/' - 1) - src[i]) & (src[i] - ('/' + 1))) >> 8) & 64)
+            ) << (18 - 6 * i);
+    return val;
 }
 
 bool key_from_base64(uint8_t key[static LEN_WGKEY_RAW], const char *base64)
 {
-	unsigned int i;
-	volatile uint8_t ret = 0;
-	int val;
+    unsigned int i;
+    volatile uint8_t ret = 0;
+    int val;
 
-	if (base64[LEN_WGKEY_BASE64 - 1] != '=')
-		return false;
+    if (base64[LEN_WGKEY_BASE64 - 1] != '=')
+        return false;
 
-	for (i = 0; i < WG_KEY_LEN / 3; ++i) {
-		val = decode_base64(&base64[i * 4]);
-		ret |= (uint32_t)val >> 31;
-		key[i * 3 + 0] = (val >> 16) & 0xff;
-		key[i * 3 + 1] = (val >> 8) & 0xff;
-		key[i * 3 + 2] = val & 0xff;
-	}
-	val = decode_base64((const char[]){ base64[i * 4 + 0], base64[i * 4 + 1], base64[i * 4 + 2], 'A' });
-	ret |= ((uint32_t)val >> 31) | (val & 0xff);
-	key[i * 3 + 0] = (val >> 16) & 0xff;
-	key[i * 3 + 1] = (val >> 8) & 0xff;
+    for (i = 0; i < WG_KEY_LEN / 3; ++i) {
+        val = decode_base64(&base64[i * 4]);
+        ret |= (uint32_t)val >> 31;
+        key[i * 3 + 0] = (val >> 16) & 0xff;
+        key[i * 3 + 1] = (val >> 8) & 0xff;
+        key[i * 3 + 2] = val & 0xff;
+    }
+    val = decode_base64((const char[]){ base64[i * 4 + 0], base64[i * 4 + 1], base64[i * 4 + 2], 'A' });
+    ret |= ((uint32_t)val >> 31) | (val & 0xff);
+    key[i * 3 + 0] = (val >> 16) & 0xff;
+    key[i * 3 + 1] = (val >> 8) & 0xff;
 
-	return 1 & ((ret - 1) >> 8);
+    return 1 & ((ret - 1) >> 8);
 }
 
 void peer_endpoint_complete(
@@ -742,20 +742,20 @@ static int parse_peer(
 
     struct sockaddr *addr;
 
-	switch (mnl_attr_get_type(attr)) {
-	case WGPEER_A_PUBLIC_KEY:
-		if (mnl_attr_get_payload_len(attr) == LEN_WGKEY_RAW) {
-			memcpy(peer->public_key, mnl_attr_get_payload(attr), LEN_WGKEY_RAW);
+    switch (mnl_attr_get_type(attr)) {
+    case WGPEER_A_PUBLIC_KEY:
+        if (mnl_attr_get_payload_len(attr) == LEN_WGKEY_RAW) {
+            memcpy(peer->public_key, mnl_attr_get_payload(attr), LEN_WGKEY_RAW);
             peer_with_public_status->with_pubkey = true;
         } else {
             println_warn("Public key length not right: %hu", mnl_attr_get_payload_len(attr));
         }
-		break;
-	case WGPEER_A_ENDPOINT:
-		if (mnl_attr_get_payload_len(attr) < sizeof *addr)
-			break;
-		addr = mnl_attr_get_payload(attr);
-		if (addr->sa_family == AF_INET && mnl_attr_get_payload_len(attr) == sizeof(struct sockaddr_in)) {
+        break;
+    case WGPEER_A_ENDPOINT:
+        if (mnl_attr_get_payload_len(attr) < sizeof *addr)
+            break;
+        addr = mnl_attr_get_payload(attr);
+        if (addr->sa_family == AF_INET && mnl_attr_get_payload_len(attr) == sizeof(struct sockaddr_in)) {
             peer->endpoint_type = HOST_TYPE_IPV4;
             peer->endpoint.sockaddr_in = *(struct sockaddr_in *)addr;
         } else if (addr->sa_family == AF_INET6 && mnl_attr_get_payload_len(attr) == sizeof(struct sockaddr_in6)) {
@@ -764,18 +764,18 @@ static int parse_peer(
         } else {
             println_warn("Endpoint is neither v4 nor v6");
         }
-		break;
-	case WGPEER_A_LAST_HANDSHAKE_TIME:
-		if (mnl_attr_get_payload_len(attr) == sizeof(peer->last_handshake)) {
-			memcpy(&peer->last_handshake, mnl_attr_get_payload(attr), sizeof(peer->last_handshake));
+        break;
+    case WGPEER_A_LAST_HANDSHAKE_TIME:
+        if (mnl_attr_get_payload_len(attr) == sizeof(peer->last_handshake)) {
+            memcpy(&peer->last_handshake, mnl_attr_get_payload(attr), sizeof(peer->last_handshake));
         } else {
             println_warn("Last handshake time size not right");
         }
-		break;
+        break;
     default:
         break;
-	}
-	return MNL_CB_OK;
+    }
+    return MNL_CB_OK;
 }
 
 int parse_peers(
@@ -794,29 +794,29 @@ int parse_peers(
     init_peer(peer);
     struct peer_with_public_status peer_with_public_status = {peer, false};
     r = mnl_attr_parse_nested(attr, parse_peer, &peer_with_public_status);
-	if (!r) return r;
+    if (!r) return r;
     if (!peer_with_public_status.with_pubkey) {
         println_error("Peer public key is empty");
         return MNL_CB_ERROR;
     }
-	return MNL_CB_OK;
+    return MNL_CB_OK;
 }
 
 int parse_interface(
     struct nlattr const *const restrict attr, 
     void *data
 ) {
-	struct netdev *restrict interface;
+    struct netdev *restrict interface;
 
     interface = data;
-	switch (mnl_attr_get_type(attr)) {
-	case WGDEVICE_A_IFINDEX:
-		if (!mnl_attr_validate(attr, MNL_TYPE_U32))
-			interface->ifindex = mnl_attr_get_u32(attr);
-		break;
-	case WGDEVICE_A_PEERS:
-		return mnl_attr_parse_nested(attr, parse_peers, interface);
-	}
+    switch (mnl_attr_get_type(attr)) {
+    case WGDEVICE_A_IFINDEX:
+        if (!mnl_attr_validate(attr, MNL_TYPE_U32))
+            interface->ifindex = mnl_attr_get_u32(attr);
+        break;
+    case WGDEVICE_A_PEERS:
+        return mnl_attr_parse_nested(attr, parse_peers, interface);
+    }
     return MNL_CB_OK;
 }
 
@@ -825,14 +825,14 @@ int get_interface_callback(
     struct nlmsghdr const *const restrict message_header, 
     void *const restrict data
 ) {
-	return mnl_attr_parse(message_header, sizeof(struct genlmsghdr), parse_interface, data);
+    return mnl_attr_parse(message_header, sizeof(struct genlmsghdr), parse_interface, data);
 }
 
 int get_interface_peers(
     struct netdev *const restrict interface
 ) {
-	struct mnlg_socket *generic_socket;
-	struct nlmsghdr *message_header;
+    struct mnlg_socket *generic_socket;
+    struct nlmsghdr *message_header;
     int r, last_error;
 
     last_error = EINTR;
@@ -881,7 +881,7 @@ int update_peer_endpoint(
     enum host_type const type
 ) {
     struct mnlg_socket *generic_socket;
-	struct nlmsghdr *message_header;
+    struct nlmsghdr *message_header;
     struct nlattr *peers_nest, *peer_nest;
     char public_key_base64[LEN_WGKEY_BASE64 + 1];
     char ip_address[LEN_IPV6_STRING + 1];
@@ -959,18 +959,18 @@ int update_peer_endpoint(
         goto close_socket;
     }
     mnl_attr_nest_end(message_header, peer_nest);
-	mnl_attr_nest_end(message_header, peers_nest);
-	if (mnlg_socket_send(generic_socket, message_header) < 0) {
+    mnl_attr_nest_end(message_header, peers_nest);
+    if (mnlg_socket_send(generic_socket, message_header) < 0) {
         println_error_with_errno("Failed to send message over socket");
         r = -1;
         goto close_socket;
-	}
-	errno = 0;
-	if (mnlg_socket_recv_run(generic_socket, NULL, NULL) < 0) {
+    }
+    errno = 0;
+    if (mnlg_socket_recv_run(generic_socket, NULL, NULL) < 0) {
         println_error_with_errno("Failed to receive message from socket");
         r = -1;
         goto close_socket;
-	}
+    }
     r = 0;
 close_socket:
     mnlg_socket_close(generic_socket);
@@ -1055,7 +1055,7 @@ int update_netdev(
             continue;
         }
     }
-	return 0;
+    return 0;
 }
 
 int update_netdevs_forever(
