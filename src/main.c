@@ -189,7 +189,7 @@ bool in6_addr_equal (
             println("different");
         }
     }
-    return some->s6_addr == other->s6_addr;
+    return *some->s6_addr == *other->s6_addr;
 }
 
 static inline 
