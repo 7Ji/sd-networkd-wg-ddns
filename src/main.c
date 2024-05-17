@@ -151,6 +151,7 @@ void ipv4_string_from_in(
     struct in_addr const *const restrict in_addr
 ) {
     if (!inet_ntop(AF_INET6, in_addr, ipv4_string, LEN_IPV4_STRING + 1)) {
+        println_error_with_errno("Failed to format IPv4 string");
         memcpy(ipv4_string, "xxx.xxx.xxx.xxx", LEN_IPV4_STRING + 1);
     }
 }
@@ -168,7 +169,7 @@ bool sockaddr_in_equal(
     if (result) {
         ipv4_string_from_in(ipv4_some, &some->sin_addr);
         ipv4_string_from_in(ipv4_other, &other->sin_addr);
-        print_info("IPv4 address %s:%hu != %s:%hu", ipv4_some, ntohs(some->sin_port), ipv4_other, ntohs(other->sin_port));
+        println_info("IPv4 address %s:%hu != %s:%hu", ipv4_some, ntohs(some->sin_port), ipv4_other, ntohs(other->sin_port));
     }
     return result;
 }
@@ -187,6 +188,7 @@ void ipv6_string_from_in6(
     struct in6_addr const *const restrict in6_addr
 ) {
     if (!inet_ntop(AF_INET6, in6_addr, ipv6_string, LEN_IPV6_STRING + 1)) {
+        println_error_with_errno("Failed to format IPv6 string");
         memcpy(ipv6_string, "xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx", LEN_IPV6_STRING + 1);
     }
 }
@@ -204,7 +206,7 @@ bool sockaddr_in6_equal (
     if (result) {
         ipv6_string_from_in6(ipv6_some, &some->sin6_addr);
         ipv6_string_from_in6(ipv6_other, &other->sin6_addr);
-        print_info("IPv6 address [%s]:%hu != [%s]:%hu", ipv6_some, ntohs(some->sin6_port), ipv6_other, ntohs(other->sin6_port));
+        println_info("IPv6 address [%s]:%hu != [%s]:%hu", ipv6_some, ntohs(some->sin6_port), ipv6_other, ntohs(other->sin6_port));
     }
     return result;
 }
