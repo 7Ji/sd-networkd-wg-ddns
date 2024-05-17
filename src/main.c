@@ -874,17 +874,6 @@ int get_interface_peers(
     return r;
 }
 
-// int update_ipv4(
-//     // struct 
-
-// ) {
-
-// }
-
-// int update_ipv6(
-
-// )
-
 int update_peer_endpoint(
     struct netdev_no_peers const *const restrict netdev_no_peers,
     uint8_t const public_key[LEN_WGKEY_RAW],
@@ -1090,6 +1079,7 @@ int update_netdevs_forever(
     if (init_netdev_peers(&interface, max_peers)) {
         return -1;
     }
+    setvbuf(stdout, NULL, _IOLBF, 0);
     println_info("Updating forever with %hu seconds interval for %hu netdev(s)", 
         interval, netdevs_count);
     for(;;) {
