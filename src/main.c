@@ -145,14 +145,32 @@ bool in_addr_equal(
     return some->s_addr == other->s_addr;
 }
 
-static inline
+static inline 
+void ipv4_string_from_in(
+    char ipv4_string[LEN_IPV4_STRING + 1],
+    struct in_addr const *const restrict in_addr
+) {
+    if (!inet_ntop(AF_INET6, in_addr, ipv4_string, LEN_IPV4_STRING + 1)) {
+        memcpy(ipv4_string, "xxx.xxx.xxx.xxx", LEN_IPV4_STRING + 1);
+    }
+}
+
 bool sockaddr_in_equal(
     struct sockaddr_in const *const restrict some,
     struct sockaddr_in const *const restrict other
 ) {
-    return 
-        some->sin_port == other->sin_port &&
+    char ipv4_some[LEN_IPV4_STRING + 1];
+    char ipv4_other[LEN_IPV4_STRING + 1];
+    bool result;
+
+    result = some->sin_port == other->sin_port &&
         in_addr_equal(&some->sin_addr, &other->sin_addr);
+    if (result) {
+        ipv4_string_from_in(ipv4_some, &some->sin_addr);
+        ipv4_string_from_in(ipv4_other, &other->sin_addr);
+        print_info("IPv4 address %s:%hu != %s:%hu", ipv4_some, ntohs(some->sin_port), ipv4_other, ntohs(other->sin_port));
+    }
+    return result;
 }
 
 static inline
@@ -163,14 +181,32 @@ bool in6_addr_equal (
     return some->s6_addr == other->s6_addr;
 }
 
-static inline
+static inline 
+void ipv6_string_from_in6(
+    char ipv6_string[LEN_IPV6_STRING + 1],
+    struct in6_addr const *const restrict in6_addr
+) {
+    if (!inet_ntop(AF_INET6, in6_addr, ipv6_string, LEN_IPV6_STRING + 1)) {
+        memcpy(ipv6_string, "xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx", LEN_IPV6_STRING + 1);
+    }
+}
+
 bool sockaddr_in6_equal (
     struct sockaddr_in6 const *const restrict some,
     struct sockaddr_in6 const *const restrict other
 ) {
-    return 
-        some->sin6_port == other->sin6_port &&
+    char ipv6_some[LEN_IPV6_STRING + 1];
+    char ipv6_other[LEN_IPV6_STRING + 1];
+    bool result;
+
+    result = some->sin6_port == other->sin6_port &&
         in6_addr_equal(&some->sin6_addr, &other->sin6_addr);
+    if (result) {
+        ipv6_string_from_in6(ipv6_some, &some->sin6_addr);
+        ipv6_string_from_in6(ipv6_other, &other->sin6_addr);
+        print_info("IPv6 address [%s]:%hu != [%s]:%hu", ipv6_some, ntohs(some->sin6_port), ipv6_other, ntohs(other->sin6_port));
+    }
+    return result;
 }
 
 static inline
@@ -842,13 +878,11 @@ int update_peer_endpoint(
         netdev_no_peers->name, netdev_no_peers->ifindex, public_key_base64);
     switch (type) {
     case HOST_TYPE_IPV6:
-        inet_ntop(AF_INET6, &address->sockaddr_in6.sin6_addr, ip_address, LEN_IPV6_STRING + 1);
-        ip_address[LEN_IPV6_STRING] = '\0';
+        ipv6_string_from_in6(ip_address, &address->sockaddr_in6.sin6_addr);
         println("[%s]:%hu", ip_address, ntohs(address->sockaddr_in6.sin6_port));
         break;
     case HOST_TYPE_IPV4:
-        inet_ntop(AF_INET, &address->sockaddr_in.sin_addr, ip_address, LEN_IPV4_STRING + 1);
-        ip_address[LEN_IPV4_STRING] = '\0';
+        ipv4_string_from_in(ip_address, &address->sockaddr_in.sin_addr);
         println("%s:%hu", ip_address, ntohs(address->sockaddr_in.sin_port));
         break;
     default:
