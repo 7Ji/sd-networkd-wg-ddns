@@ -179,16 +179,6 @@ bool in6_addr_equal (
     struct in6_addr const *const restrict some,
     struct in6_addr const *const restrict other
 ) {
-    uint8_t const *c_some = some->s6_addr;
-    uint8_t const *c_other = other->s6_addr;
-    for (unsigned short i = 0; i < 16; ++i) {
-        printf("%02x vs %02x: ", c_some[i], c_other[i]);
-        if (c_some[i] == c_other[i]) {
-            println("same");
-        } else {
-            println("different");
-        }
-    }
     return *some->s6_addr == *other->s6_addr;
 }
 
