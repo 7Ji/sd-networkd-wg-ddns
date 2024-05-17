@@ -166,7 +166,7 @@ bool sockaddr_in_equal(
 
     result = some->sin_port == other->sin_port &&
         in_addr_equal(&some->sin_addr, &other->sin_addr);
-    if (result) {
+    if (!result) {
         ipv4_string_from_in(ipv4_some, &some->sin_addr);
         ipv4_string_from_in(ipv4_other, &other->sin_addr);
         println_info("IPv4 address %s:%hu != %s:%hu", ipv4_some, ntohs(some->sin_port), ipv4_other, ntohs(other->sin_port));
@@ -203,7 +203,7 @@ bool sockaddr_in6_equal (
 
     result = some->sin6_port == other->sin6_port &&
         in6_addr_equal(&some->sin6_addr, &other->sin6_addr);
-    if (result) {
+    if (!result) {
         ipv6_string_from_in6(ipv6_some, &some->sin6_addr);
         ipv6_string_from_in6(ipv6_other, &other->sin6_addr);
         println_info("IPv6 address [%s]:%hu != [%s]:%hu", ipv6_some, ntohs(some->sin6_port), ipv6_other, ntohs(other->sin6_port));
