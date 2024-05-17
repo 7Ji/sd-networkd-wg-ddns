@@ -604,10 +604,12 @@ void dump_netdev(
             break;
         case HOST_TYPE_IPV4:
             ipv4_string_from_in(ip_address, &peer->endpoint.sockaddr_in.sin_addr);
+            println_info("  -> Endpoint host: %s", ip_address);
             port = peer->endpoint.sockaddr_in.sin_port;
             break;
         case HOST_TYPE_IPV6:
             ipv6_string_from_in6(ip_address, &peer->endpoint.sockaddr_in6.sin6_addr);
+            println_info("  -> Endpoint host: %s", ip_address);
             port = peer->endpoint.sockaddr_in6.sin6_port;
             break;
         default:
