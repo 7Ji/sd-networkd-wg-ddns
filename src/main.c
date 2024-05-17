@@ -170,9 +170,7 @@ bool sockaddr_in6_equal (
 ) {
     return 
         some->sin6_port == other->sin6_port &&
-        some->sin6_flowinfo == other->sin6_flowinfo &&
-        in6_addr_equal(&some->sin6_addr, &other->sin6_addr) &&
-        some->sin6_scope_id == other->sin6_scope_id;
+        in6_addr_equal(&some->sin6_addr, &other->sin6_addr);
 }
 
 static inline
@@ -846,12 +844,12 @@ int update_peer_endpoint(
     case HOST_TYPE_IPV6:
         inet_ntop(AF_INET6, &address->sockaddr_in6.sin6_addr, ip_address, LEN_IPV6_STRING + 1);
         ip_address[LEN_IPV6_STRING] = '\0';
-        println("[%s]:%hu", ip_address, address->sockaddr_in6.sin6_port);
+        println("[%s]:%hu", ip_address, ntohs(address->sockaddr_in6.sin6_port));
         break;
     case HOST_TYPE_IPV4:
         inet_ntop(AF_INET, &address->sockaddr_in.sin_addr, ip_address, LEN_IPV4_STRING + 1);
         ip_address[LEN_IPV4_STRING] = '\0';
-        println("%s:%hu", ip_address, address->sockaddr_in.sin_port);
+        println("%s:%hu", ip_address, ntohs(address->sockaddr_in.sin_port));
         break;
     default:
         println_error("\nIllegal host type %d (%s)", type, host_type_strings[type]);
