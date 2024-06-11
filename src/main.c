@@ -1081,7 +1081,14 @@ int update_netdevs_forever(
     if (init_netdev_peers(&interface, max_peers)) {
         return -1;
     }
-    setvbuf(stdout, NULL, _IOLBF, 0);
+    if (setvbuf(stdout, NULL, _IOLBF, 0)) {
+        println_error_with_errno("Failed to set stdout to line buffered");
+        return -1;
+    }
+    if (fflush(stdout)) {
+        println_error_with_errno("Failed to flush stdout");
+        return -1;
+    }
     println_info("Updating forever with %hu seconds interval for %hu netdev(s)", 
         interval, netdevs_count);
     for(;;) {
