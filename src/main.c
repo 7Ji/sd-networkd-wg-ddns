@@ -74,12 +74,14 @@
 #define SOCKET_BUFFER_SIZE (mnl_ideal_socket_buffer_size())
 
 enum host_type {
+    HOST_TYPE_NONE,
     HOST_TYPE_DOMAIN,
     HOST_TYPE_IPV4,
     HOST_TYPE_IPV6
 };
 
 char *host_type_strings[] = {
+    "none",
     "domain",
     "IPv4",
     "IPv6"
@@ -242,7 +244,7 @@ void init_peer(struct peer *const restrict peer) {
     peer->endpoint.domain.name[0] = '\0';
     peer->endpoint.domain.len_name = 0;
     peer->endpoint.domain.port = 0;
-    peer->endpoint_type = HOST_TYPE_DOMAIN;
+    peer->endpoint_type = HOST_TYPE_NONE;
     peer->last_handshake.tv_nsec = 0;
     peer->last_handshake.tv_sec = 0;
 }
@@ -348,11 +350,16 @@ void peer_endpoint_complete(
             return;
         }
     }
-    peer->endpoint_type = HOST_TYPE_DOMAIN;
-    memcpy(peer->endpoint.domain.name, host, len_host);
+    if (len_host) {
+        peer->endpoint_type = HOST_TYPE_DOMAIN;
+        memcpy(peer->endpoint.domain.name, host, len_host);
+        peer->endpoint.domain.port = port;
+    } else {
+        peer->endpoint_type = HOST_TYPE_NONE;
+        peer->endpoint.domain.port = 0;
+    }
     peer->endpoint.domain.name[len_host] = '\0';
     peer->endpoint.domain.len_name = len_host;
-    peer->endpoint.domain.port = port;
 }
 
 int parse_netdev_buffer(
@@ -598,6 +605,8 @@ void dump_netdev(
         println_info("  -> Public Key: %s", public_key_base64);
         println_info("  -> Endpoint type: %s", host_type_strings[peer->endpoint_type]);
         switch (peer->endpoint_type) {
+        case HOST_TYPE_NONE:
+            continue;
         case HOST_TYPE_DOMAIN:
             println_info("  -> Endpoint host: %s", peer->endpoint.domain.name);
             port = peer->endpoint.domain.port;
@@ -613,8 +622,7 @@ void dump_netdev(
             port = peer->endpoint.sockaddr_in6.sin6_port;
             break;
         default:
-            port = 0; // To make GCC happy
-            break;
+            continue;
         }
         println_info("  -> Endpoint port: %hu", ntohs(port));
     }
@@ -1012,40 +1020,30 @@ int update_netdev(
             return -1;
         }
         looked_up_type = peer_netdev->endpoint_type;
-        switch (peer_netdev->endpoint_type) {
-        case HOST_TYPE_DOMAIN:
-            if (getaddrinfo(peer_netdev->endpoint.domain.name, NULL, NULL, &addrinfos)) {
-                println_warn("Failed to resolve DNS for '%s'", peer_netdev->endpoint.domain.name);
-                continue;
+        if (getaddrinfo(peer_netdev->endpoint.domain.name, NULL, NULL, &addrinfos)) {
+            println_warn("Failed to resolve DNS for '%s'", peer_netdev->endpoint.domain.name);
+            continue;
+        }
+        for (addrinfo = addrinfos; looked_up_type == HOST_TYPE_DOMAIN && addrinfo; addrinfo = addrinfo->ai_next) {
+            switch (addrinfo->ai_family) {
+            case AF_INET:
+                looked_up_type = HOST_TYPE_IPV4;
+                looked_up_address.sockaddr_in = *(struct sockaddr_in *)addrinfo->ai_addr;
+                looked_up_address.sockaddr_in.sin_port = peer_netdev->endpoint.domain.port;
+                break;
+            case AF_INET6:
+                looked_up_type = HOST_TYPE_IPV6;
+                looked_up_address.sockaddr_in6 = *(struct sockaddr_in6 *)addrinfo->ai_addr;
+                looked_up_address.sockaddr_in6.sin6_port = peer_netdev->endpoint.domain.port;
+                break;
+            default:
+                break;
             }
-            for (addrinfo = addrinfos; looked_up_type == HOST_TYPE_DOMAIN && addrinfo; addrinfo = addrinfo->ai_next) {
-                switch (addrinfo->ai_family) {
-                case AF_INET:
-                    looked_up_type = HOST_TYPE_IPV4;
-                    looked_up_address.sockaddr_in = *(struct sockaddr_in *)addrinfo->ai_addr;
-                    looked_up_address.sockaddr_in.sin_port = peer_netdev->endpoint.domain.port;
-                    break;
-                case AF_INET6:
-                    looked_up_type = HOST_TYPE_IPV6;
-                    looked_up_address.sockaddr_in6 = *(struct sockaddr_in6 *)addrinfo->ai_addr;
-                    looked_up_address.sockaddr_in6.sin6_port = peer_netdev->endpoint.domain.port;
-                    break;
-                default:
-                    break;
-                }
-            }
-            freeaddrinfo(addrinfos);
-            if (looked_up_type == HOST_TYPE_DOMAIN) {
-                println_warn("Failed to lookup domain '%s'", peer_netdev->endpoint.domain.name);
-                continue;
-            }
-            break;
-        case HOST_TYPE_IPV4:
-            looked_up_address.sockaddr_in = peer_netdev->endpoint.sockaddr_in;
-            break;
-        case HOST_TYPE_IPV6:
-            looked_up_address.sockaddr_in6 = peer_netdev->endpoint.sockaddr_in6;
-            break;
+        }
+        freeaddrinfo(addrinfos);
+        if (looked_up_type == HOST_TYPE_DOMAIN) {
+            println_warn("Failed to lookup domain '%s'", peer_netdev->endpoint.domain.name);
+            continue;
         }
         if (peer_interface->endpoint_type == looked_up_type &&
             sockaddr_in46_equal(&peer_interface->endpoint.sockaddr_in46, &looked_up_address, looked_up_type)
